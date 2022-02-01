@@ -2,7 +2,7 @@
 HOME=/home/parapsychic
 
 echo "Installing drivers, xorg, display manager, alacritty and necessary software"
-sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession 
+sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession dunst 
 
 echo "Changing lightdm.conf to use webkit2-greeter"
 sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
@@ -59,6 +59,7 @@ cp $HOME/dot-files/.bashrc $HOME/
 mkdir -p .config/nvim
 cp -r $HOME/dot-files/nvim/ $HOME/.config/nvim/
 cp $HOME/dot-files/autostart.sh $HOME/
+cp -r $HOME/dot-files/dunst/ $HOME/.config/dunst
 
 echo "Setting up Git"
 git config --global user.email "febinkdominic@outlook.com"
