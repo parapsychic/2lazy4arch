@@ -2,7 +2,7 @@
 HOME=/home/parapsychic
 
 echo "Installing drivers, xorg, display manager, alacritty and necessary software"
-sudo pacman -S xf86-video-amdgpu nvidia nvida-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession librefox
+sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession 
 
 echo "Changing lightdm.conf to use webkit2-greeter"
 sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
@@ -18,6 +18,9 @@ git clone https://aur.archlinux.org/yay.git
 cd yay/
 makepkg -si PKGBUILD
 cd
+
+echo "Installing LibreWolf"
+yay -S librefox-bin
 
 echo "Installing fonts"
 yay -S ttf-ms-fonts
