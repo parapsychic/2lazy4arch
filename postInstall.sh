@@ -1,11 +1,23 @@
 #!/bin/bash
 HOME=/home/parapsychic
 
+if [[ "$EUID" = 0 ]]; then
+    echo "(1) already root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "(2) correct password"
+    else
+        echo "(3) wrong password"
+        exit 1
+    fi
+fi
+
 echo "Installing drivers, xorg, display manager, alacritty and necessary software"
-sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession 
+pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession 
 
 echo "Changing lightdm.conf to use webkit2-greeter"
-sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
+sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
 
 
 
@@ -34,9 +46,9 @@ mkdir -p $HOME/.dwm
 cp -r $HOME/dot-files/dwm/ $HOME/.dwm/
 cd $HOME/.dwm/
 make
-sudo make clean install
-sudo mkdir -p /usr/share/xsessions
-sudo echo "[Desktop Entry]
+make clean install
+mkdir -p /usr/share/xsessions
+echo "[Desktop Entry]
 Encoding=UTF-8
 Name=Dwm
 Comment=the dynamic window manager
@@ -50,7 +62,7 @@ echo "Installing dmenu"
 cp -r $HOME/dot-files/dmenu/ $HOME/.dmenu/
 cd $HOME/.dmenu/
 make
-sudo make clean install
+make clean install
 
 
 echo "Copying dotfiles"
@@ -66,7 +78,7 @@ echo "Git is not authenticated with Github"
 
 echo "Installing L33T Software"
 echo "mpv, htop, lf, neofetch, fzf, lolcat, ueberzug, some fonts"
-sudo pacman -S mpv htop lf neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
+pacman -S mpv htop lf neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
 yay -S yt-dlp-drop-in ytfzf tabbed otf-manjari 
 
 
