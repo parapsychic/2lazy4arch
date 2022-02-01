@@ -36,13 +36,13 @@ cd $HOME/.dwm/
 make
 sudo make clean install
 sudo mkdir -p /usr/share/xsessions
-sudo echo "[Desktop Entry]
+echo "[Desktop Entry]
 Encoding=UTF-8
 Name=Dwm
 Comment=the dynamic window manager
 Exec=dwm
 Icon=dwm
-Type=XSession" > /usr/share/xsessions/dwm.desktop
+Type=XSession" | sudo tee /usr/share/xsessions/dwm.desktop
 
 
 
