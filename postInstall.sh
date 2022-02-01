@@ -31,7 +31,7 @@ git clone https://github.com/parapsychic/dot-files.git
 echo " === INSTALLING SUCKLESS ==="
 echo "Installing DWM"
 mkdir -p $HOME/.dwm
-cp $HOME/dot-files/dwm/ $HOME/.dwm/
+cp -r $HOME/dot-files/dwm/ $HOME/.dwm/
 cd $HOME/.dwm/
 make
 sudo make clean install
@@ -47,7 +47,7 @@ Type=XSession" > /usr/share/xsessions/dwm.desktop
 
 
 echo "Installing dmenu"
-cp $HOME/dot-files/dmenu/ $HOME/.dmenu/
+cp -r $HOME/dot-files/dmenu/ $HOME/.dmenu/
 cd $HOME/.dmenu/
 make
 sudo make clean install
@@ -56,7 +56,7 @@ sudo make clean install
 echo "Copying dotfiles"
 cp $HOME/dot-files/.bashrc $HOME/
 mkdir -p .config/nvim
-cp $HOME/dot-files/nvim/ $HOME/.config/nvim/
+cp -r $HOME/dot-files/nvim/ $HOME/.config/nvim/
 cp $HOME/dot-files/autostart.sh $HOME/
 
 echo "Setting up Git"
