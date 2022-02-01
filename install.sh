@@ -43,7 +43,7 @@ echo "Enter user password"
 passwd parapsychic 
 
 echo "Adding wheel to sudoers"
-visudo -c sudoers
+sed -i "82 i %wheel ALL=(ALL) ALL" /etc/sudoers
 
 echo "Copying postInstall.sh to /home/parapsychic/"
 cp postInstall.sh /home/parapsychic/
