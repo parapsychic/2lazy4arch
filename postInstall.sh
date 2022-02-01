@@ -35,8 +35,8 @@ cp -r $HOME/dot-files/dwm/ $HOME/.dwm/
 cd $HOME/.dwm/
 make
 sudo make clean install
-mkdir -p /usr/share/xsessions
-echo "[Desktop Entry]
+sudo mkdir -p /usr/share/xsessions
+sudo echo "[Desktop Entry]
 Encoding=UTF-8
 Name=Dwm
 Comment=the dynamic window manager
