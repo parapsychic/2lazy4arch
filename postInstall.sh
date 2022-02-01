@@ -43,7 +43,7 @@ git clone https://github.com/parapsychic/dot-files.git
 echo " === INSTALLING SUCKLESS ==="
 echo "Installing DWM"
 mkdir -p $HOME/.dwm
-cp -r $HOME/dot-files/dwm/ $HOME/.dwm/
+cp -r $HOME/dot-files/dwm/* $HOME/.dwm/
 cd $HOME/.dwm/
 make
 make clean install
@@ -59,7 +59,7 @@ Type=XSession" > /usr/share/xsessions/dwm.desktop
 
 
 echo "Installing dmenu"
-cp -r $HOME/dot-files/dmenu/ $HOME/.dmenu/
+cp -r $HOME/dot-files/dmenu/* $HOME/.dmenu/
 cd $HOME/.dmenu/
 make
 make clean install
