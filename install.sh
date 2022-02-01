@@ -25,7 +25,7 @@ echo "Enter root password: "
 passwd 
 
 echo "Installing packages"
-pacman -S grub efibootmgr os-prober ntfs-3g networkmanager network-manager-applet wireless_tools wpa_supplicant dialog mtools dosfstools base-devel linux-headers bluez bluez-utils pulseaudio-bluetooth alsa-utils cups nvim 
+pacman -S grub efibootmgr os-prober ntfs-3g networkmanager network-manager-applet wireless_tools wpa_supplicant dialog mtools dosfstools base-devel linux-headers bluez bluez-utils pulseaudio-bluetooth alsa-utils cups neovim 
 
 echo "Installing grub"
 echo "os-prober is disabled, windows won't be recognized"
