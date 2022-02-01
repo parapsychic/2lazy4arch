@@ -18,3 +18,25 @@ Yes, I could've made these into variables. But I won't. I want anyone other than
 - reboot
 - login to new user
 - run postInstall.sh
+
+### WHAT WILL YOU BE LEFT WITH
+A functioning minimal system
+- Suckless stuff : DWM and dmenu | no desktop environment
+- xorg and lightdm with webkit2 greeter
+- Alacritty as terminal emulator (themed)
+- NeoVim (plugins with VimPlug) as text editor, remapped a bunch of keys. see config.
+- classic necessary programs like htop, youtube-dl
+- classic Arch stuff like neofetch and lolcat
+- Nitrogen for wallpaper. First time setup necessary.
+- a bashrc that's decent
+- grub, because why not?
+- pacman with color and pacman. because why not?
+- dot files include a configuration for i3 with xfce. Requires rofi, feh, and picom
+
+
+### HOW TO EXTEND
+- DWM source in .dwm
+- dmenu source in .dmenu
+- autostart script starts stuff when dwm is started. It also sets the battery/time/username bar at top. Edit it to start more stuff at startup. Located at $HOME/autostart.sh. Don't forget &
+- all other configs in usual .config file.
+- I've kept most of the keybindings from original dwm. It's better.
