@@ -7,11 +7,12 @@ sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit
 echo "Changing lightdm.conf to use webkit2-greeter"
 sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
 
-
-
 echo "Enabling lightdm"
 systemctl enable lightdm
 
+echo "Setting up pacman in style"
+sudo sed -i '33 i ILoveCandy' /etc/pacman.conf
+sudo sed -i '34 i Color' /etc/pacman.conf
 
 echo "Installing yay"
 git clone https://aur.archlinux.org/yay.git
@@ -30,8 +31,7 @@ git clone https://github.com/parapsychic/dot-files.git
 
 echo " === INSTALLING SUCKLESS ==="
 echo "Installing DWM"
-mkdir -p $HOME/.dwm
-cp -r $HOME/dot-files/dwm/* $HOME/.dwm/
+cp -r $HOME/dot-files/dwm/ $HOME/.dwm
 cd $HOME/.dwm/
 make
 sudo make clean install
@@ -47,7 +47,7 @@ Type=XSession" | sudo tee /usr/share/xsessions/dwm.desktop
 
 
 echo "Installing dmenu"
-cp -r $HOME/dot-files/dmenu/* $HOME/.dmenu/
+cp -r $HOME/dot-files/dmenu/ $HOME/.dmenu
 cd $HOME/.dmenu/
 make
 sudo make clean install
@@ -66,11 +66,9 @@ echo "Git is not authenticated with Github"
 
 echo "Installing L33T Software"
 echo "mpv, htop, lf, neofetch, fzf, lolcat, ueberzug, some fonts"
-sudo pacman -S mpv htop lf neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
-yay -S yt-dlp-drop-in ytfzf tabbed otf-manjari 
+sudo pacman -S mpv htop neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
+yay -S yt-dlp-drop-in ytfzf lf tabbed otf-manjari 
 
-
-echo "htop"
 
 todo="TODO: \n## EDIT GRUB WITH OS_PROBER, SAVED and RESOLUTION ##\n## RUN :PlugInstall inside nvim ##\n## Git Personal Access Token ##"
 echo -e $todo
