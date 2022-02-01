@@ -6,6 +6,7 @@ sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit
 
 echo "Changing lightdm.conf to use webkit2-greeter"
 sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
+sudo sed -i 's/archlinux-user/archlinux-logo/g' lightdm-webkit2-greeter.conf
 
 echo "Enabling lightdm"
 systemctl enable lightdm
