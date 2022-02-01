@@ -40,7 +40,7 @@ echo "[Desktop Entry]
 Encoding=UTF-8
 Name=Dwm
 Comment=the dynamic window manager
-Exec=dwm
+Exec=/usr/local/bin/dwm
 Icon=dwm
 Type=XSession" | sudo tee /usr/share/xsessions/dwm.desktop
 
