@@ -63,6 +63,8 @@ cp -r $HOME/dot-files/dunst/ $HOME/.config/dunst
 mkdir -p $HOME/.bin 
 cp $HOME/dot-files/bat_notification $HOME/.bin/
 sudo cp $HOME/dot-files/ytdmenu /usr/local/bin/ytdmenu
+cp -r $HOME/dot-files/lf/ $HOME/.config/lf
+cp $HOME/dot-files/lf-uberzug $HOME/.bin/
 
 echo "Setting up Git"
 git config --global user.email "febinkdominic@outlook.com"
@@ -74,6 +76,25 @@ echo "mpv, htop, lf, neofetch, fzf, lolcat, ueberzug, some fonts"
 sudo pacman -S mpv htop neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
 yay -S yt-dlp-drop-in ytfzf lf tabbed otf-manjari 
 
+echo "Setting up touchpad"
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee <<'EOF' /etc/X11/xorg.conf.d/90-touchpad.conf 1> /dev/null
+
+Section "InputClass"
+    Identifier "touchpad"
+    MatchIsTouchpad "on"
+    Driver "libinput"
+    Option "Tapping" "on"
+    Option "NaturalScrolling" "on"
+    Option "ScrollMethod" "twofinger"
+    Option "TappingDrag" "on"
+    Option "TappingDragLock" "on"
+    Option "DisableWhileTyping" "on"
+EndSection
+EOF
+
+
+echo "Configuration complete"
 
 todo="TODO: \n## EDIT GRUB WITH OS_PROBER, SAVED and RESOLUTION ##\n## RUN :PlugInstall inside nvim ##\n## Git Personal Access Token ##"
 echo -e $todo
