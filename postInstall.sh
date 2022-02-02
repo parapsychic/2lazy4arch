@@ -61,7 +61,8 @@ cp -r $HOME/dot-files/nvim/ $HOME/.config/nvim/
 cp $HOME/dot-files/autostart.sh $HOME/
 cp -r $HOME/dot-files/dunst/ $HOME/.config/dunst
 mkdir -p $HOME/.bin 
-cp -r $HOME/dot-file/bat_notification $HOME/.bin/
+cp $HOME/dot-files/bat_notification $HOME/.bin/
+sudo cp $HOME/dot-files/ytdmenu /usr/local/bin/ytdmenu
 
 echo "Setting up Git"
 git config --global user.email "febinkdominic@outlook.com"
