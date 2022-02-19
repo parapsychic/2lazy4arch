@@ -56,10 +56,12 @@ sudo make clean install
 
 echo "Copying dotfiles"
 cp $HOME/dot-files/.bashrc $HOME/
-mkdir -p .config/nvim
-cp -r $HOME/dot-files/nvim/ $HOME/.config/nvim/
+cp -r $HOME/dot-files/nvim/ $HOME/.config/nvim
 cp $HOME/dot-files/autostart.sh $HOME/
 cp -r $HOME/dot-files/dunst/ $HOME/.config/dunst
+cp -r $HOME/dot-files/alacritty $HOME/.config/alacritty
+
+
 mkdir -p $HOME/.bin 
 cp $HOME/dot-files/bat_notification $HOME/.bin/
 sudo cp $HOME/dot-files/ytdmenu /usr/local/bin/ytdmenu
