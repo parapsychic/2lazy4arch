@@ -90,7 +90,6 @@ Section "InputClass"
     Option "NaturalScrolling" "on"
     Option "ScrollMethod" "twofinger"
     Option "TappingDrag" "on"
-    Option "TappingDragLock" "on"
     Option "DisableWhileTyping" "on"
 EndSection
 EOF
