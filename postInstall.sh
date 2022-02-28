@@ -75,7 +75,7 @@ echo "Git is not authenticated with Github"
 
 echo "Installing L33T Software"
 echo "mpv, htop, lf, neofetch, fzf, lolcat, ueberzug, some fonts"
-sudo pacman -S mpv htop neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels
+sudo pacman -S mpv htop neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels brightnessctl
 yay -S yt-dlp-drop-in ytfzf lf tabbed otf-manjari 
 
 echo "Setting up touchpad"
