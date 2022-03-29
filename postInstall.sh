@@ -27,8 +27,12 @@ yay -S librefox-bin
 echo "Installing fonts"
 yay -S ttf-ms-fonts
 
+echo "Installing picom-jonaburg"
+yay -S picom-jonaburg-git
+
 echo "Cloning dot-files"
 git clone https://github.com/parapsychic/dot-files.git
+
 
 echo " === INSTALLING SUCKLESS ==="
 echo "Installing DWM"
