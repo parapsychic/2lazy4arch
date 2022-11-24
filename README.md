@@ -11,6 +11,7 @@ Yes, I could've made these into variables. But I won't. I want anyone other than
 - I recommend installing a text editor at this phase in case you want to edit something. The script installs nvim, but I recommend installing some editor at this point.
 - Edit the files with your username and hostname.
 - Install git
+- **generate fstab**
 - chroot into installed partition
 - git clone this repo
 - run ./install.sh
