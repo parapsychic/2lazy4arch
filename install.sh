@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Creating Swap partition"
-dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+dd if=/dev/zero of=/swapfile bs=1M count=8192 status=progress
 chmod 600 /swapfile
 mkswap /swapfile
 swapon /swapfile
