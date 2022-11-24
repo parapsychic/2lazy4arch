@@ -2,14 +2,7 @@
 HOME=/home/parapsychic
 
 echo "Installing drivers, xorg, display manager, alacritty and necessary software"
-sudo pacman -S xf86-video-amdgpu nvidia nvidia-utils xorg lightdm lightdm-webkit2-greeter alacritty nitrogen lxsession dunst xclip redshift conky
-
-echo "Changing lightdm.conf to use webkit2-greeter"
-sudo sed -i '102 i greeter-session=lightdm-webkit2-greeter' /etc/lightdm/lightdm.conf
-sudo sed -i 's/archlinux-user/archlinux-logo/g' lightdm-webkit2-greeter.conf
-
-echo "Enabling lightdm"
-systemctl enable lightdm
+sudo pacman -Syu xf86-video-amdgpu nvidia nvidia-utils xorg alacritty nitrogen lxsession dunst xclip redshift conky
 
 echo "Setting up pacman in style"
 sudo sed -i '33 i ILoveCandy' /etc/pacman.conf
@@ -22,17 +15,20 @@ makepkg -si PKGBUILD
 cd
 
 echo "Installing LibreWolf"
-yay -S librefox-bin
+yay -Syu librefox-bin
 
 echo "Installing fonts"
-yay -S ttf-ms-fonts
+yay -Syu ttf-ms-fonts
 
 echo "Installing picom-jonaburg"
-yay -S picom-jonaburg-git
+yay -Syu picom-jonaburg-git
 
 echo "Cloning dot-files"
 git clone https://github.com/parapsychic/dot-files.git
 
+echo "Installing startx"
+pacman -Syu xorg-xinit
+cp $HOME/dot-files/.xinitrc $HOME/
 
 echo " === INSTALLING SUCKLESS ==="
 echo "Installing DWM"
@@ -79,7 +75,7 @@ echo "Git is not authenticated with Github"
 echo "Installing L33T Software"
 echo "mpv, htop, lf, neofetch, fzf, lolcat, ueberzug, some fonts"
 sudo pacman -S mpv htop neofetch fzf lolcat ueberzug ttf-hack ttf-joypixels brightnessctl
-yay -S yt-dlp-drop-in ytfzf lf tabbed otf-manjari 
+yay -Syu yt-dlp-drop-in ytfzf lf tabbed otf-manjari 
 
 echo "Setting up touchpad"
 sudo mkdir -p /etc/X11/xorg.conf.d
