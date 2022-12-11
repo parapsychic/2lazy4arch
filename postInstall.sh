@@ -2,7 +2,7 @@
 HOME=/home/parapsychic
 
 echo "Installing drivers, xorg, display manager, alacritty and necessary software"
-sudo pacman -Syu xf86-video-amdgpu nvidia nvidia-utils xorg alacritty nitrogen lxsession dunst xclip redshift conky
+sudo pacman -Syu xf86-video-amdgpu nvidia nvidia-utils xorg alacritty nitrogen lxsession dunst xclip redshift conky feh mpv
 
 echo "Setting up pacman in style"
 sudo sed -i '33 i ILoveCandy' /etc/pacman.conf
@@ -22,6 +22,9 @@ yay -Syu ttf-ms-fonts
 
 echo "Installing picom-jonaburg"
 yay -Syu picom-jonaburg-git
+
+echo "Installing rofi-emoji"
+yay -Syu rofi-emoji
 
 echo "Cloning dot-files"
 git clone https://github.com/parapsychic/dot-files.git
