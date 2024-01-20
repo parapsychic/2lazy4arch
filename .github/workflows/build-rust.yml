@@ -17,9 +17,9 @@ jobs:
         ref: rust_rewrite
 
     - name: Set up Rust
-      uses: actions/setup-rust@v2
+      uses: ATiltedTree/setup-rust@v1
       with:
-        profile: minimal
+          rust-version: stable
 
     - name: Build
       run: cargo build --release
