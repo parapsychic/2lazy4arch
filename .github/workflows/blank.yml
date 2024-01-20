@@ -1,0 +1,34 @@
+name: Rust Build and Release
+
+on:
+  push:
+    branches:
+      - rust_rewrite
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        ref: rust_rewrite
+
+    - name: Set up Rust
+      uses: actions/setup-rust@v2
+      with:
+        profile: minimal
+
+    - name: Build
+      run: cargo build --release
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      with:
+        files: target/release/your_binary_name
+        asset-name: 2lazy4arch
+        release-name: Release ${{ github.event.after }}
+
+  # Add additional steps as needed
