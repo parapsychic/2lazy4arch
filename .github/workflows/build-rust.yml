@@ -14,7 +14,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
       with:
-        ref: rust_rewrite
+        ref: rust-rewrite
 
     - name: Set up Rust
       uses: ATiltedTree/setup-rust@v1
@@ -28,7 +28,7 @@ jobs:
       id: create_release
       uses: actions/create-release@v1
       with:
-        files: target/release/your_binary_name
+        files: target/release/tui
         asset-name: 2lazy4arch
         release-name: Release ${{ github.event.after }}
 
