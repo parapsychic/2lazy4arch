@@ -21,7 +21,7 @@ pub struct Shell {
 impl Shell {
     pub fn new() -> Self {
         Self {
-            build_mode: RunMode::Testing,
+            build_mode: RunMode::Release,
             last_run_cmd: None
         }
     }
