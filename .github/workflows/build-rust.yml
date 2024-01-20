@@ -3,7 +3,7 @@ name: Rust Build and Release
 on:
   push:
     branches:
-      - rust_rewrite
+      - rust-rewrite
 
 jobs:
   build:
