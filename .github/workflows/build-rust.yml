@@ -31,7 +31,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: target/release/tui
+        tag_name: ${{ github.ref }}
         asset-name: 2lazy4arch
         release-name: Release ${{ github.event.after }}
+        prerelease: true
 
   # Add additional steps as needed
