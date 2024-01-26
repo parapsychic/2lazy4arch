@@ -1,19 +1,20 @@
 use anyhow::{Result, Ok};
 use enums::StorageSize;
-use filesystem_tasks::initialize_swap;
-use shell_iface::Shell;
+use filesystem_tasks::Filesystem;
+use shell_iface::{Shell, logger::Logger};
 
 pub mod filesystem_tasks;
+pub mod pacman;
 pub mod enums;
 
-pub fn presetup(shell: &Shell) -> Result<()>{
-    shell.run("lsblk", "");
+pub fn base_install(shell: &mut Shell) -> Result<()>{
+    
     Ok(()) 
 }
 
-pub fn install(shell: &Shell) -> Result<()>{
-    initialize_swap(shell, 8, Some(StorageSize::Gigabyte))?;
-    Ok(())
+
+pub fn install(mut shell: &mut Shell, logger: &Logger) -> Result<()>{
+     Ok(())
 }
 
 #[cfg(test)]
