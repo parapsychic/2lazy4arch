@@ -1,3 +1,7 @@
+## Notice:
+This project is being rewritten in Rust to be a more general purpose Arch installer launched from the live environment.
+I'm not even 10% done with the rewrite, but you can check it out on the branch `rust-rewrite`.
+
 # 2lazy4arch
 installing arch really fast, can't be bothered to setup everything. Most I can do is partition disks. Let the computer do the rest. does not follow the best practices, but it works.
 
