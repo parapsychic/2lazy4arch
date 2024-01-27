@@ -6,6 +6,7 @@ use shell_iface::{Shell, logger::Logger};
 pub mod filesystem_tasks;
 pub mod pacman;
 pub mod enums;
+pub mod base_installer;
 
 pub fn base_install(shell: &mut Shell) -> Result<()>{
     

@@ -31,17 +31,6 @@ impl Debug for ShellCmd{
     }
 }
 
-/// A utility function to convert &str to Vec<String>
-fn build_args(args: &str) -> Vec<String>{
-    let arguments = String::from(args);
-    let res = arguments.split(' ').map(|x|{
-        x.to_string()
-    }).collect::<Vec<String>>();
-    res
- 
-}
-
-
 /// An abstraction over the actual shell.
 /// It can run and store the results of the command.
 /// Spawned commands are not stored as the result cannot be known.
@@ -93,7 +82,7 @@ impl<'a> Shell<'a> {
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
     pub fn run_with_args(&mut self, cmd: &str, args: &str) -> Result<Output> {
-        let args_vec = build_args(args);
+        let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {} {:#?}", cmd, args);
 
@@ -170,14 +159,14 @@ impl<'a> Shell<'a> {
     /// Only status is returned, not the output.
     /// Raises error if exited with non-zero code.
     pub fn run_and_wait_with_args(&mut self, cmd: &str, args: &str) -> Result<ExitStatus> {
-        let args = build_args(args);
+        let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
             let status = Command::new("echo").arg("dummy").status()?;
             self.set_last_command(cmd, &status, None, None);
             return Ok(status);
         }
-        let status = Command::new(cmd).args(args).status()?;
+        let status = Command::new(cmd).args(args_vec).status()?;
 
         if !status.success(){
             
@@ -211,13 +200,13 @@ impl<'a> Shell<'a> {
     /// Does not have access to output of the program and so does not raise any error on
     /// unsuccessful exit.
     pub fn spawn_with_args(&mut self, cmd: &str, args: &str) -> Result<Child> {
-        let args = build_args(args);
+        let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
             let child = Command::new("echo").arg("dummy").spawn()?;
             return Ok(child);
         }
-        let child = Command::new(cmd).args(args).spawn()?;
+        let child = Command::new(cmd).args(args_vec).spawn()?;
         // spawned processes do not get saved.
         Ok(child)
     }

@@ -1,14 +1,22 @@
 use shell_iface::{Shell, logger::Logger};
 use anyhow::{Result, anyhow};
 
-struct Pacman<'a>{
-    shell: &'a mut Shell<'a>,
+pub struct Pacman<'a>{
+    shell: Shell<'a>,
     logger: &'a Logger
 }
 
 impl<'a> Pacman<'a> {
-    fn update_mirrors(&mut self) -> Result<()>{
-        let status = self.shell.run_and_wait_with_args("pacman", "-Syyyu")?;
+    pub fn new<'b>(logger: &'b Logger) -> Pacman<'b>{
+        let shell = Shell::new("PACMAN", logger);
+        Pacman {
+            shell,
+            logger
+        }
+    }
+
+    pub fn update_mirrors(&mut self) -> Result<()>{
+        let status = self.shell.run_and_wait_with_args("pacman", "-Syyy")?;
         if !status.success(){
             self.logger.debug("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
             return Err(anyhow!("Could not update pacman lists"));
@@ -16,7 +24,7 @@ impl<'a> Pacman<'a> {
         Ok(())
     }
 
-    fn install(&mut self, packages: &str) -> Result<()>{
+    pub fn install(&mut self, packages: &str) -> Result<()>{
         let status = self.shell.run_and_wait_with_args("pacman", &format!("-Syu {}", packages))?;
         if !status.success(){
             self.logger.debug(&format!("PACMAN: Could not install {}.", packages));
@@ -26,10 +34,11 @@ impl<'a> Pacman<'a> {
         Ok(())
     }
 
-    fn run_reflector(&mut self, country: &str) -> Result<()>{
-        self.install("reflector")?;
-
+    /// newer arch isos include reflector by default. this should be used in the live environment
+    /// only. Using it in chroot without reflector installed might panic.
+    pub fn run_reflector(&mut self, country: &str) -> Result<()>{
         let status = self.shell.run_and_wait_with_args("reflector", &format!("-c {} --sort rate --save /etc/pacman.d/mirrorlist", country))?;
+
         if !status.success(){
             self.logger.debug("PACMAN: Reflector failed. Exited with non-zero status.");
             return Err(anyhow!("Could not retrieve new pacman mirrors from reflector."));
