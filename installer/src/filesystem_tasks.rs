@@ -3,14 +3,14 @@ use std::{fs, os::unix::fs::FileTypeExt, path::Path};
 use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
-use crate::enums::StorageSize;
+use crate::{enums::StorageSize, utils::PartitionTable};
 
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
     boot: Option<String>,
     root: Option<String>,
     home: Option<String>,
-    logger: &'a Logger,
+    external_partitions: Option<PartitionTable>,
 }
 
 impl<'a> Filesystem<'a> {
@@ -21,7 +21,7 @@ impl<'a> Filesystem<'a> {
             boot: None,
             root: None,
             home: None,
-            logger,
+            external_partitions: None,
         }
     }
 
@@ -53,8 +53,8 @@ impl<'a> Filesystem<'a> {
         )?;
 
         if !status.success() {
-            self.logger
-                .debug("FILESYSTEM: dd failed. Exited with non-zero status.");
+            self.shell
+                .log("dd failed. Exited with non-zero status.");
             return Err(anyhow!("Could not create swap file."));
         }
 
@@ -70,7 +70,7 @@ impl<'a> Filesystem<'a> {
 
     pub fn format_partitions(&mut self, format_boot: bool) -> Result<()> {
         if self.boot.is_none() || self.root.is_none() {
-            self.logger.debug("FILESYSTEM: Boot or root is not set");
+            self.shell.log("Boot or root is not set");
             return Err(anyhow!("Boot or root is not set"));
         }
 
@@ -79,8 +79,8 @@ impl<'a> Filesystem<'a> {
             .run_and_wait_with_args("mkfs.ext4", &self.root.clone().unwrap())?;
 
         if self.home.is_none() {
-            self.logger
-                .debug("Home is not set. No separate partition will be created");
+            self.shell
+                .log("Home is not set. No separate partition will be created");
         } else {
             let _ = self
                 .shell
@@ -99,7 +99,7 @@ impl<'a> Filesystem<'a> {
 
     pub fn mount_partitions(&mut self) -> Result<()> {
         if self.boot.is_none() || self.root.is_none() {
-            self.logger.debug("FILESYSTEM: Boot or root is not set");
+            self.shell.log("Boot or root is not set");
             return Err(anyhow!("Boot or root is not set"));
         }
 
@@ -109,7 +109,7 @@ impl<'a> Filesystem<'a> {
         match Path::new("/mnt/boot").try_exists() {
             Ok(exists) => {
                 if exists {
-                    self.logger.debug("FILESYSTEM: /mnt/boot exists. This was not supposed to happen. Trying to continue.");
+                    self.shell.log("/mnt/boot exists. This was not supposed to happen. Trying to continue.");
                 } else {
                     fs::create_dir("/mnt/boot")?;
                 }
@@ -119,7 +119,7 @@ impl<'a> Filesystem<'a> {
                 )?;
             }
             Err(e) => {
-                self.logger.debug(&format!("FILESYSTEM: Existence of /mnt/boot cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
+                self.shell.log(&format!("Existence of /mnt/boot cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
                 return Err(anyhow!("Could not confirm the existence of /mnt/boot. This could be a permission issue on /mnt "));
             }
         };
@@ -128,7 +128,7 @@ impl<'a> Filesystem<'a> {
             match Path::new("/mnt/home").try_exists() {
                 Ok(exists) => {
                     if exists {
-                        self.logger.debug("FILESYSTEM: /mnt/home exists. This was not supposed to happen. Trying to continue.");
+                        self.shell.log("/mnt/home exists. This was not supposed to happen. Trying to continue.");
                     } else {
                         fs::create_dir("/mnt/home")?;
                     }
@@ -136,7 +136,7 @@ impl<'a> Filesystem<'a> {
                         .run_and_wait_with_args("mount", &format!("{} /mnt/home", home_path))?;
                 }
                 Err(e) => {
-                    self.logger.debug(&format!("FILESYSTEM: Existence of /mnt/home cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
+                    self.shell.log(&format!("Existence of /mnt/home cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
                     return Err(anyhow!("Could not confirm the existence of /mnt/home. This could be a permission issue on /mnt "));
                 }
             };
@@ -151,8 +151,8 @@ impl<'a> Filesystem<'a> {
         if status.success() {
             return Ok(());
         }
-        self.logger
-            .debug("cfdisk failed. Is the script not running as root?");
+        self.shell
+            .log("cfdisk failed. Is the script not running as root?");
         Err(anyhow!("cfdisk failed. Partitioning failure."))
     }
 
@@ -174,13 +174,13 @@ impl<'a> Filesystem<'a> {
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.logger.debug(&format!("FILESYSTEM: {}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
+            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
         if let Some(x) = &self.root {
             if x == partition {
-                self.logger.debug(&format!(
-                    "FILESYSTEM: {}: / and /boot have same partition. Cannot mount to boot",
+                self.shell.log(&format!(
+                    "{}: / and /boot have same partition. Cannot mount to boot",
                     partition
                 ));
                 return Err(anyhow!("{} is already mounted to /.", partition));
@@ -189,8 +189,8 @@ impl<'a> Filesystem<'a> {
 
         if let Some(x) = &self.home {
             if x == partition {
-                self.logger.debug(&format!(
-                    "FILESYSTEM: {}: /home and /boot have same partition. Cannot mount to boot",
+                self.shell.log(&format!(
+                    "{}: /home and /boot have same partition. Cannot mount to boot",
                     partition
                 ));
                 return Err(anyhow!("{} is already mounted to /home.", partition));
@@ -210,13 +210,13 @@ impl<'a> Filesystem<'a> {
         let partition = partition.unwrap().trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.logger.debug(&format!("FILESYSTEM: {}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
+            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
         if let Some(x) = &self.home {
             if x == partition {
-                self.logger.debug(&format!(
-                    "FILESYSTEM: {}: /boot and /home have same partition. Cannot mount home",
+                self.shell.log(&format!(
+                    "{}: /boot and /home have same partition. Cannot mount home",
                     partition
                 ));
                 return Err(anyhow!("{} is already mounted to /boot.", partition));
@@ -225,7 +225,7 @@ impl<'a> Filesystem<'a> {
 
         if let Some(x) = &self.root {
             if x == partition {
-                self.logger.debug(&format!("FILESYSTEM: {}: Cannot mount to home. To set /home and / to same partition, uncheck separate /home", partition));
+                self.shell.log(&format!("{}: Cannot mount to home. To set /home and / to same partition, uncheck separate /home", partition));
                 return Err(anyhow!("{} is already mounted to /. To have them share the same partition, uncheck separate /home.", partition));
             }
         }
@@ -238,13 +238,13 @@ impl<'a> Filesystem<'a> {
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.logger.debug(&format!("FILESYSTEM: {}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to root", partition));
+            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to root", partition));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
         if let Some(x) = &self.boot {
             if x == partition {
-                self.logger.debug(&format!(
-                    "FILESYSTEM: {}: / and /boot have same partition. Cannot mount to root",
+                self.shell.log(&format!(
+                    "{}: / and /boot have same partition. Cannot mount to root",
                     partition
                 ));
                 return Err(anyhow!("{} is already mounted to /boot.", partition));
@@ -253,7 +253,7 @@ impl<'a> Filesystem<'a> {
 
         if let Some(x) = &self.home {
             if x == partition {
-                self.logger.debug(&format!("FILESYSTEM: {}: Cannot mount to root. To set /home and / to same partition, uncheck separate /home", partition));
+                self.shell.log(&format!("{}: Cannot mount to root. To set /home and / to same partition, uncheck separate /home", partition));
                 return Err(anyhow!("{} is already mounted to /home. To have them share the same partition, uncheck separate /home.", partition));
             }
         }

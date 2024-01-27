@@ -3,22 +3,20 @@ use anyhow::{Result, anyhow};
 
 pub struct Pacman<'a>{
     shell: Shell<'a>,
-    logger: &'a Logger
 }
 
 impl<'a> Pacman<'a> {
     pub fn new<'b>(logger: &'b Logger) -> Pacman<'b>{
-        let shell = Shell::new("PACMAN", logger);
+        let shell = Shell::new("Pacman", logger);
         Pacman {
             shell,
-            logger
         }
     }
 
     pub fn update_mirrors(&mut self) -> Result<()>{
         let status = self.shell.run_and_wait_with_args("pacman", "-Syyy")?;
         if !status.success(){
-            self.logger.debug("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
+            self.shell.log("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
             return Err(anyhow!("Could not update pacman lists"));
         }
         Ok(())
@@ -27,7 +25,7 @@ impl<'a> Pacman<'a> {
     pub fn install(&mut self, packages: &str) -> Result<()>{
         let status = self.shell.run_and_wait_with_args("pacman", &format!("-Syu {}", packages))?;
         if !status.success(){
-            self.logger.debug(&format!("PACMAN: Could not install {}.", packages));
+            self.shell.log(&format!("PACMAN: Could not install {}.", packages));
             return Err(anyhow!("Could not install {}", packages));
         }
 
@@ -40,7 +38,7 @@ impl<'a> Pacman<'a> {
         let status = self.shell.run_and_wait_with_args("reflector", &format!("-c {} --sort rate --save /etc/pacman.d/mirrorlist", country))?;
 
         if !status.success(){
-            self.logger.debug("PACMAN: Reflector failed. Exited with non-zero status.");
+            self.shell.log("PACMAN: Reflector failed. Exited with non-zero status.");
             return Err(anyhow!("Could not retrieve new pacman mirrors from reflector."));
         }
         

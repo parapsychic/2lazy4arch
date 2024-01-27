@@ -8,9 +8,9 @@ impl Logger {
         Logger { is_debug}
     }
 
-    pub fn debug(&self, msg: &str) {
+    pub fn debug(&self, origin: &str, msg: &str) {
         if self.is_debug {
-            eprintln!("{}", msg);
+            eprintln!("{}: {}", origin.to_uppercase(), msg);
         }
     }
 }

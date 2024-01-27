@@ -7,6 +7,7 @@ pub mod filesystem_tasks;
 pub mod pacman;
 pub mod enums;
 pub mod base_installer;
+pub mod utils;
 
 pub fn base_install(shell: &mut Shell) -> Result<()>{
     

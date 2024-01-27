@@ -78,6 +78,11 @@ impl<'a> Shell<'a> {
         });
     }
     
+    /// Logs using the shell's logger
+    pub fn log(&self, msg: &str){
+        self.logger.debug(&self.identifier, msg);
+    }
+
     /// Run the program without stdin. 
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
@@ -93,7 +98,7 @@ impl<'a> Shell<'a> {
         let output = Command::new(cmd).args(args_vec).output()?;
         
         if !output.status.success(){
-            self.logger.debug(&format!("{}: {} {:#?} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd, args));
+            self.log(&format!("{}: {} {:#?} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd, args));
             return Err(anyhow!("{}: {} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd));
         }
 
