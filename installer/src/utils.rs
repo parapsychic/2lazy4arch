@@ -1,4 +1,5 @@
 use std::collections::{HashMap, BTreeMap};
+use anyhow::{Result, anyhow};
 
 /* Contains utility functions and structs */
 
@@ -27,14 +28,44 @@ impl PartitionTable {
         }
     }
 
-    pub fn insert(&mut self, key: String, value: String) -> Result<Option<String>, String> {
+    pub fn clear(&mut self){
+        self.value_to_key.clear();
+        self.key_to_value.clear();
+    }
+
+   pub fn remove_key(&mut self, key: &str) -> Result<String> {
+        match self.key_to_value.remove(key) {
+            Some(x) => {
+                self.value_to_key.remove(&x);
+                Ok(x)
+            },
+            None => {
+                Err(anyhow!("{} does not exist", key))
+            },
+        }
+   }
+
+
+
+   pub fn remove_value(&mut self, value: &str) -> Result<String> {
+        match self.value_to_key.remove(value){
+            Some(x) => {
+                self.key_to_value.remove(&x);
+                Ok(x)
+            },
+            None => {
+                Err(anyhow!("{} does not exist", value))
+            },
+        }
+   }
+    
+    pub fn insert(&mut self, key: String, value: String) -> Result<()> {
         if self.key_to_value.contains_key(&key) || self.value_to_key.contains_key(&value) {
-            Err(format!("Key or value already exists"))
+            Err(anyhow!("Mount point or partition already mounted: {}: {}", key, value))
         } else {
-            let old_value = self.key_to_value.insert(key.clone(), value.clone());
+            self.key_to_value.insert(key.clone(), value.clone());
             self.value_to_key.insert(value, key);
-            // return old value and replace it with new value.
-            Ok(old_value)
+            Ok(())
         }
     }
 

@@ -150,6 +150,9 @@ fn main() {
         if buffer.trim().to_lowercase() == "y" {
             break;
         }
+
+        println!("Clearing all partitions. In the end tui, only specific mount points will be cleared.");
+        filesystem.clear_mounts();
     }
 
     // Format partitions

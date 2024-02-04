@@ -7,10 +7,7 @@ use crate::{enums::StorageSize, utils::PartitionTable};
 
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
-    boot: Option<String>,
-    root: Option<String>,
-    home: Option<String>,
-    external_partitions: Option<PartitionTable>,
+    partitions: PartitionTable,
 }
 
 impl<'a> Filesystem<'a> {
@@ -18,10 +15,7 @@ impl<'a> Filesystem<'a> {
         let shell = Shell::new("FILESYSTEM", logger);
         Filesystem {
             shell,
-            boot: None,
-            root: None,
-            home: None,
-            external_partitions: None,
+            partitions: PartitionTable::new(),
         }
     }
 
@@ -53,8 +47,7 @@ impl<'a> Filesystem<'a> {
         )?;
 
         if !status.success() {
-            self.shell
-                .log("dd failed. Exited with non-zero status.");
+            self.shell.log("dd failed. Exited with non-zero status.");
             return Err(anyhow!("Could not create swap file."));
         }
 
@@ -69,28 +62,35 @@ impl<'a> Filesystem<'a> {
     }
 
     pub fn format_partitions(&mut self, format_boot: bool) -> Result<()> {
-        if self.boot.is_none() || self.root.is_none() {
+        if self.partitions.get_value("boot").is_none()
+            || self.partitions.get_value("root").is_none()
+        {
             self.shell.log("Boot or root is not set");
             return Err(anyhow!("Boot or root is not set"));
         }
 
-        let _ = self
-            .shell
-            .run_and_wait_with_args("mkfs.ext4", &self.root.clone().unwrap())?;
+        let _ = self.shell.run_and_wait_with_args(
+            "mkfs.ext4",
+            &self.partitions.get_value("root").clone().unwrap(),
+        )?;
 
-        if self.home.is_none() {
+        if self.partitions.get_value("home").is_none() {
             self.shell
                 .log("Home is not set. No separate partition will be created");
         } else {
-            let _ = self
-                .shell
-                .run_and_wait_with_args("mkfs.ext4", &self.home.clone().unwrap())?;
+            let _ = self.shell.run_and_wait_with_args(
+                "mkfs.ext4",
+                &self.partitions.get_value("home").clone().unwrap(),
+            )?;
         }
 
         if format_boot {
             let _ = self.shell.run_and_wait_with_args(
                 "mkfs.fat",
-                &format!("-F 32 {}", self.boot.clone().unwrap()),
+                &format!(
+                    "-F 32 {}",
+                    self.partitions.get_value("boot").clone().unwrap()
+                ),
             );
         }
 
@@ -98,7 +98,9 @@ impl<'a> Filesystem<'a> {
     }
 
     pub fn mount_partitions(&mut self) -> Result<()> {
-        if self.boot.is_none() || self.root.is_none() {
+        if self.partitions.get_value("boot").is_none()
+            || self.partitions.get_value("root").is_none()
+        {
             self.shell.log("Boot or root is not set");
             return Err(anyhow!("Boot or root is not set"));
         }
@@ -109,7 +111,9 @@ impl<'a> Filesystem<'a> {
         match Path::new("/mnt/boot").try_exists() {
             Ok(exists) => {
                 if exists {
-                    self.shell.log("/mnt/boot exists. This was not supposed to happen. Trying to continue.");
+                    self.shell.log(
+                        "/mnt/boot exists. This was not supposed to happen. Trying to continue.",
+                    );
                 } else {
                     fs::create_dir("/mnt/boot")?;
                 }
@@ -158,15 +162,24 @@ impl<'a> Filesystem<'a> {
 
     /* GETTERS */
     pub fn get_boot(&self) -> Option<String> {
-        self.boot.clone()
+        match self.partitions.get_value("boot") {
+            Some(x) => Some(x.to_string()),
+            None => None,
+        }
     }
 
     pub fn get_home(&self) -> Option<String> {
-        self.home.clone()
+        match self.partitions.get_value("home") {
+            Some(x) => Some(x.to_string()),
+            None => None,
+        }
     }
 
     pub fn get_root(&self) -> Option<String> {
-        self.root.clone()
+        match self.partitions.get_value("root") {
+            Some(x) => Some(x.to_string()),
+            None => None,
+        }
     }
 
     /* SETTERS */
@@ -174,63 +187,60 @@ impl<'a> Filesystem<'a> {
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
+            self.shell.log(&format!(
+                "{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot",
+                partition
+            ));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
-        if let Some(x) = &self.root {
-            if x == partition {
-                self.shell.log(&format!(
-                    "{}: / and /boot have same partition. Cannot mount to boot",
-                    partition
-                ));
-                return Err(anyhow!("{} is already mounted to /.", partition));
+
+        match self
+            .partitions
+            .insert(String::from("boot"), partition.to_string())
+        {
+            Ok(_) => {}
+            Err(x) => {
+                self.shell.log(&x.to_string());
+                return Err(x);
             }
         }
-
-        if let Some(x) = &self.home {
-            if x == partition {
-                self.shell.log(&format!(
-                    "{}: /home and /boot have same partition. Cannot mount to boot",
-                    partition
-                ));
-                return Err(anyhow!("{} is already mounted to /home.", partition));
-            }
-        }
-
-        self.boot = Some(partition.to_string());
         Ok(())
     }
 
     pub fn set_home(&mut self, partition: Option<&str>) -> Result<()> {
         if partition.is_none() {
-            self.home = None;
+            if let Some(_) = self.get_home() { // try to delete only if there is some value
+                match self.partitions.remove_key("home") {
+                    Ok(_) => {}
+                    Err(x) => {
+                        self.shell.log(&x.to_string());
+                        return Err(x);
+                    }
+                }
+            }
             return Ok(());
         }
 
         let partition = partition.unwrap().trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot", partition));
+            self.shell.log(&format!(
+                "{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot",
+                partition
+            ));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
-        if let Some(x) = &self.home {
-            if x == partition {
-                self.shell.log(&format!(
-                    "{}: /boot and /home have same partition. Cannot mount home",
-                    partition
-                ));
-                return Err(anyhow!("{} is already mounted to /boot.", partition));
+
+        match self
+            .partitions
+            .insert(String::from("home"), partition.to_string())
+        {
+            Ok(_) => {}
+            Err(x) => {
+                self.shell.log(&x.to_string());
+                return Err(x);
             }
         }
-
-        if let Some(x) = &self.root {
-            if x == partition {
-                self.shell.log(&format!("{}: Cannot mount to home. To set /home and / to same partition, uncheck separate /home", partition));
-                return Err(anyhow!("{} is already mounted to /. To have them share the same partition, uncheck separate /home.", partition));
-            }
-        }
-
-        self.boot = Some(partition.to_string());
         Ok(())
     }
 
@@ -238,28 +248,28 @@ impl<'a> Filesystem<'a> {
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
-            self.shell.log(&format!("{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to root", partition));
+            self.shell.log(&format!(
+                "{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to root",
+                partition
+            ));
             return Err(anyhow!("{} does not look like a partition.", partition));
         }
-        if let Some(x) = &self.boot {
-            if x == partition {
-                self.shell.log(&format!(
-                    "{}: / and /boot have same partition. Cannot mount to root",
-                    partition
-                ));
-                return Err(anyhow!("{} is already mounted to /boot.", partition));
+
+        match self
+            .partitions
+            .insert(String::from("root"), partition.to_string())
+        {
+            Ok(_) => {}
+            Err(x) => {
+                self.shell.log(&x.to_string());
+                return Err(x);
             }
         }
-
-        if let Some(x) = &self.home {
-            if x == partition {
-                self.shell.log(&format!("{}: Cannot mount to root. To set /home and / to same partition, uncheck separate /home", partition));
-                return Err(anyhow!("{} is already mounted to /home. To have them share the same partition, uncheck separate /home.", partition));
-            }
-        }
-
-        self.root = Some(partition.to_string());
         Ok(())
+    }
+
+    pub fn clear_mounts(&mut self) {
+        self.partitions.clear();
     }
 }
 
