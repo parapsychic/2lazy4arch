@@ -1,18 +1,30 @@
 use std::{io, process};
+use anyhow::Result;
 
 use installer::{filesystem_tasks::Filesystem, pacman::Pacman, base_installer::BaseInstaller};
-use shell_iface::{logger::Logger, Shell};
+use shell_iface::logger::Logger;
 
 // This file will be rewritten to be a TUI.
 // Currently, I'm testing using the main.
 fn main() {
+    let logger = Logger::new(true);
+    let mut filesystem = Filesystem::new(&logger);
+    match demo(&mut filesystem, &logger) {
+        Ok(_) => {},
+        Err(_) => {
+            filesystem.try_unmount();
+        },
+    }
+}
+
+fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
+
     let mut buffer = String::new();
     let stdin = io::stdin();
 
-    let logger = Logger::new(true);
 
     /* LIVE PRESETUP */
-    let mut pacman = Pacman::new(&logger);
+    let mut pacman = Pacman::new(logger);
     // run reflector
     {
         println!("Enter your country for pacman mirrorlist: ");
@@ -28,7 +40,6 @@ fn main() {
      * Formatting partitions
      * Mounting partitions */
 
-    let mut filesystem = Filesystem::new(&logger);
 
     // Creating partitions with cfdisk
     loop {
@@ -177,11 +188,21 @@ fn main() {
 
     
     /* BASE INSTALLATION */
-    let mut base_installer = BaseInstaller::new(&logger); 
+    let mut base_installer = BaseInstaller::new(logger); 
 
     // Install base packages
     {
         base_installer.base_packages_install().unwrap();
     }
 
+    // generate fstab
+    {
+        base_installer.genfstab().unwrap();
+    }
+
+    // chroot
+    {
+    }
+    
+    Ok(())
 }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{HashMap, BTreeMap, hash_map};
 use anyhow::{Result, anyhow};
 
 /* Contains utility functions and structs */
@@ -26,6 +26,10 @@ impl PartitionTable {
             key_to_value: HashMap::new(),
             value_to_key: BTreeMap::new(),
         }
+    }
+
+    pub fn iter(&self) -> hash_map::Iter<String,String>{
+        return self.key_to_value.iter().clone()
     }
 
     pub fn clear(&mut self){
@@ -61,7 +65,7 @@ impl PartitionTable {
     
     pub fn insert(&mut self, key: String, value: String) -> Result<()> {
         if self.key_to_value.contains_key(&key) || self.value_to_key.contains_key(&value) {
-            Err(anyhow!("Mount point or partition already mounted: {}: {}", key, value))
+            Err(anyhow!("Mount point or partition already mounted. {}: {}", key, value))
         } else {
             self.key_to_value.insert(key.clone(), value.clone());
             self.value_to_key.insert(value, key);
@@ -77,3 +81,4 @@ impl PartitionTable {
         self.value_to_key.get(value)
     }
 }
+

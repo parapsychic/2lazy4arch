@@ -15,6 +15,7 @@ impl<'a> BaseInstaller<'a> {
     }
 
     pub fn base_packages_install(&mut self) -> Result<()> {
+       self.shell.log(&"Installing base packages.");
         match self
             .shell
             .run_and_wait_with_args("pacstrap", "-K /mnt base linux linux-firmware neovim")
@@ -31,6 +32,7 @@ impl<'a> BaseInstaller<'a> {
     }
 
     pub fn genfstab(&mut self) -> Result<()> {
+       self.shell.log(&"Generating fstab.");
         let output = self.shell.run_with_args("genfstab", "-U /mnt")?;
 
         let mut fstab = match OpenOptions::new()

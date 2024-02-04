@@ -14,7 +14,7 @@ impl<'a> Pacman<'a> {
     }
 
     pub fn update_mirrors(&mut self) -> Result<()>{
-        let status = self.shell.run_and_wait_with_args("pacman", "-Syyy")?;
+        let status = self.shell.run_and_wait_with_args("pacman", "-Syyy --noconfirm")?;
         if !status.success(){
             self.shell.log("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
             return Err(anyhow!("Could not update pacman lists"));
@@ -23,7 +23,7 @@ impl<'a> Pacman<'a> {
     }
 
     pub fn install(&mut self, packages: &str) -> Result<()>{
-        let status = self.shell.run_and_wait_with_args("pacman", &format!("-Syu {}", packages))?;
+        let status = self.shell.run_and_wait_with_args("pacman", &format!("-Syu --noconfirm {}", packages))?;
         if !status.success(){
             self.shell.log(&format!("PACMAN: Could not install {}.", packages));
             return Err(anyhow!("Could not install {}", packages));

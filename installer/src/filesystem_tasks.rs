@@ -3,7 +3,7 @@ use std::{fs, os::unix::fs::FileTypeExt, path::Path};
 use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
-use crate::{enums::StorageSize, utils::PartitionTable};
+use crate::partition_table::PartitionTable;
 
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
@@ -26,34 +26,6 @@ impl<'a> Filesystem<'a> {
         }
     }
 
-    pub fn initialize_swap(&mut self, size: usize, unit: Option<StorageSize>) -> Result<()> {
-        let unit_char = match unit {
-            Some(StorageSize::Megabyte) => 'M',
-            Some(StorageSize::Gigabyte) => 'G',
-            Some(StorageSize::Kilobyte) => 'K',
-            Some(StorageSize::Terabyte) => 'T',
-            Some(StorageSize::Byte) => ' ',
-            None => {
-                println!("No unit set, defaulting to Megabytes. \n [This shouldn't have happenend. The UI has sent some wrong info");
-                'M'
-            }
-        };
-
-        println!("Size: {}", size);
-        println!("Creating Swap Partition");
-        let status = self.shell.run_and_wait_with_args(
-            "dd",
-            "if=/dev/zero of=/swapfile bs=1M count=8192 status=progress",
-        )?;
-
-        if !status.success() {
-            self.shell.log("dd failed. Exited with non-zero status.");
-            return Err(anyhow!("Could not create swap file."));
-        }
-
-        Ok(())
-    }
-
     pub fn lsblk(&mut self) -> Result<String> {
         match self.shell.run("lsblk") {
             Ok(x) => Ok(String::from_utf8(x.stdout)?),
@@ -71,7 +43,7 @@ impl<'a> Filesystem<'a> {
 
         let _ = self.shell.run_and_wait_with_args(
             "mkfs.ext4",
-            &self.partitions.get_value("root").clone().unwrap(),
+            &format!("-F {}", self.partitions.get_value("root").clone().unwrap()),
         )?;
 
         if self.partitions.get_value("home").is_none() {
@@ -80,7 +52,7 @@ impl<'a> Filesystem<'a> {
         } else {
             let _ = self.shell.run_and_wait_with_args(
                 "mkfs.ext4",
-                &self.partitions.get_value("home").clone().unwrap(),
+                &format!("-F {}", self.partitions.get_value("home").clone().unwrap())
             )?;
         }
 
@@ -268,8 +240,16 @@ impl<'a> Filesystem<'a> {
         Ok(())
     }
 
+
+    /* CLEAN UP FUNCTIONS */
     pub fn clear_mounts(&mut self) {
         self.partitions.clear();
+    }
+
+    pub fn try_unmount(&mut self){
+        for (_, v) in self.partitions.iter() {
+           let _ = self.shell.run_and_wait_with_args("umount", v);
+        }
     }
 }
 
