@@ -14,6 +14,7 @@ use anyhow::{Result, anyhow};
 /// If the key or value already exists, the insertion fails, preventing duplicates.
 /// ### Retrieval
 /// You can retrieve values by providing keys or keys by providing values.
+/// Here, key is the mount point and value is the device
 #[derive(Debug)]
 pub struct PartitionTable {
     key_to_value: HashMap<String, String>,
@@ -64,11 +65,18 @@ impl PartitionTable {
    }
     
     pub fn insert(&mut self, key: String, value: String) -> Result<()> {
-        if self.key_to_value.contains_key(&key) || self.value_to_key.contains_key(&value) {
-            Err(anyhow!("Mount point or partition already mounted. {}: {}", key, value))
+        let fmt_key = if key.starts_with('/'){
+            &key[1..]
+        }
+        else {
+            &key[..]
+        };
+
+        if self.key_to_value.contains_key(fmt_key) || self.value_to_key.contains_key(&value) {
+            Err(anyhow!("Mount point or partition already mounted. {}: {}", fmt_key, value))
         } else {
-            self.key_to_value.insert(key.clone(), value.clone());
-            self.value_to_key.insert(value, key);
+            self.key_to_value.insert(fmt_key.to_string().clone(), value.clone());
+            self.value_to_key.insert(value, fmt_key.to_string());
             Ok(())
         }
     }

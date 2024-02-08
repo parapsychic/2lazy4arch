@@ -52,7 +52,7 @@ impl<'a> Filesystem<'a> {
         } else {
             let _ = self.shell.run_and_wait_with_args(
                 "mkfs.ext4",
-                &format!("-F {}", self.partitions.get_value("home").clone().unwrap())
+                &format!("-F {}", self.partitions.get_value("home").clone().unwrap()),
             )?;
         }
 
@@ -65,11 +65,14 @@ impl<'a> Filesystem<'a> {
                 ),
             );
         }
+        
 
         return Ok(());
     }
 
+    /// Mounts all partitions
     pub fn mount_partitions(&mut self) -> Result<()> {
+        // check if essential partitions are set.
         if self.partitions.get_value("boot").is_none()
             || self.partitions.get_value("root").is_none()
         {
@@ -77,43 +80,32 @@ impl<'a> Filesystem<'a> {
             return Err(anyhow!("Boot or root is not set"));
         }
 
+        // mount root 
         self.shell
             .run_and_wait_with_args("mount", &format!("{} /mnt", self.get_root().unwrap()))?;
 
-        match Path::new("/mnt/boot").try_exists() {
-            Ok(exists) => {
-                if exists {
-                    self.shell.log(
-                        "/mnt/boot exists. This was not supposed to happen. Trying to continue.",
-                    );
-                } else {
-                    fs::create_dir("/mnt/boot")?;
-                }
-                self.shell.run_and_wait_with_args(
-                    "mount",
-                    &format!("{} /mnt/boot", self.get_boot().unwrap()),
-                )?;
-            }
-            Err(e) => {
-                self.shell.log(&format!("Existence of /mnt/boot cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
-                return Err(anyhow!("Could not confirm the existence of /mnt/boot. This could be a permission issue on /mnt "));
-            }
-        };
-
-        if let Some(home_path) = self.get_home() {
-            match Path::new("/mnt/home").try_exists() {
+        // mount other devices in any order.
+        for (k, v) in self.partitions.iter() {
+            let mount_path = format!("/mnt/{}", &k);
+            match Path::new(&mount_path).try_exists() {
                 Ok(exists) => {
+                    // check if a dir exists to mount to.
+                    // Ideally, it shouldn't and we should be making it.
                     if exists {
-                        self.shell.log("/mnt/home exists. This was not supposed to happen. Trying to continue.");
+                        self.shell.log(&format!(
+                            "{} exists. This was not supposed to happen. Trying to continue.",
+                            &mount_path
+                        ));
                     } else {
-                        fs::create_dir("/mnt/home")?;
+                        fs::create_dir(&mount_path)?;
                     }
+
                     self.shell
-                        .run_and_wait_with_args("mount", &format!("{} /mnt/home", home_path))?;
+                        .run_and_wait_with_args("mount", &format!("{} {}", v, mount_path))?;
                 }
                 Err(e) => {
-                    self.shell.log(&format!("Existence of /mnt/home cannot be confirmed. This is usually a permission error. Original Error: {:#?}", e));
-                    return Err(anyhow!("Could not confirm the existence of /mnt/home. This could be a permission issue on /mnt "));
+                    self.shell.log(&format!("Existence of {} cannot be confirmed. This is usually a permission error. Original Error: {:#?}", &mount_path, e));
+                    return Err(anyhow!("Could not confirm the existence of {}. This could be a permission issue on /mnt ", mount_path));
                 }
             };
         }
@@ -181,7 +173,8 @@ impl<'a> Filesystem<'a> {
 
     pub fn set_home(&mut self, partition: Option<&str>) -> Result<()> {
         if partition.is_none() {
-            if let Some(_) = self.get_home() { // try to delete only if there is some value
+            if let Some(_) = self.get_home() {
+                // try to delete only if there is some value
                 match self.partitions.remove_key("home") {
                     Ok(_) => {}
                     Err(x) => {
@@ -240,15 +233,14 @@ impl<'a> Filesystem<'a> {
         Ok(())
     }
 
-
     /* CLEAN UP FUNCTIONS */
     pub fn clear_mounts(&mut self) {
         self.partitions.clear();
     }
 
-    pub fn try_unmount(&mut self){
+    pub fn try_unmount(&mut self) {
         for (_, v) in self.partitions.iter() {
-           let _ = self.shell.run_and_wait_with_args("umount", v);
+            let _ = self.shell.run_and_wait_with_args("umount", v);
         }
     }
 }
