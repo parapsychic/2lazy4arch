@@ -2,21 +2,36 @@ use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 use std::{fs, os::unix};
 
-use crate::utils::{append_to_file, write_to_file};
+use crate::{
+    pacman::Pacman,
+    utils::{append_to_file, write_to_file},
+};
+
+
+pub enum Bootloader{
+    Grub,
+    SystemDBoot
+}
 
 /// Essentials basically installs arch to be a bootable/usable state.
 /// This is same as the install.sh
 pub struct Essentials<'a> {
     is_chroot: bool,
     shell: Shell<'a>,
+    pacman: Pacman<'a>,
+    bootloader: Bootloader
 }
 
 impl<'a> Essentials<'a> {
-    pub fn new<'b>(logger: &'b Logger) -> Essentials<'b> {
+    pub fn new<'b>(logger: &'b Logger, bootloader: Bootloader) -> Essentials<'b> {
         let shell = Shell::new("Base Installer", logger);
+        let pacman = Pacman::new(logger);
+         
         Essentials {
             is_chroot: false,
             shell,
+            pacman,
+            bootloader
         }
     }
 
@@ -89,7 +104,10 @@ impl<'a> Essentials<'a> {
         append_to_file("/etc/fstab", "/swapfile none  swap defaults 0 0")
     }
 
-    pub fn set_timezones(&mut self) -> Result<()> {
+    /// Sets the timezone.
+    /// Expects a valid Timezone from zoneinfo
+    /// /usr/share/zoneinfo/Asia/Kolkata
+    pub fn set_timezones(&mut self, timezone: &str) -> Result<()> {
         self.shell.log("Setting timezones.");
         if !self.is_chroot {
             self.shell.log("Setting timezones failed. Not in chroot.");
@@ -97,7 +115,10 @@ impl<'a> Essentials<'a> {
         }
 
         self.shell.log("Synchronizing Timezones");
-        unix::fs::symlink("/usr/share/zoneinfo/Asia/Kolkata", "/etc/localtime")?;
+        unix::fs::symlink(
+            format!("/usr/share/zoneinfo/{}", timezone),
+            "/etc/localtime",
+        )?;
         self.shell.run_and_wait_with_args("hwclock", "--systohc")?;
         Ok(())
     }
@@ -113,7 +134,6 @@ impl<'a> Essentials<'a> {
         self.shell.run_and_wait("locale-gen")?;
         append_to_file("/etc/locale.conf", &format!("LANG={}", locale))
     }
-
 
     /// Sets the hostname and the hosts configuration
     pub fn set_hostname(&mut self, hostname: &str) -> Result<()> {
@@ -131,9 +151,79 @@ impl<'a> Essentials<'a> {
         Ok(())
     }
 
-    ///set up root password
-    pub fn set_password(&mut self, password: &str){
-        
+    pub fn mkinitcpio(&mut self) -> Result<()> {
+        self.shell.log("Running mkinitcpio");
+        self.shell.run_and_wait_with_args("mkinitcpio", "-P")?;
+        self.shell.log("Completed mkinitcpio");
+
+        Ok(())
+    }
+
+    /// set up root password
+    pub fn set_password(&mut self, password: &str) -> Result<()> {
+        self.shell.log("Setting password");
+        self.shell
+            .spawn_with_piped_input(&"chpasswd", &format!("root:{}", password))?;
+        self.shell.log("Password set successfully.");
+
+        Ok(())
+    }
+
+    /// installs the required programs
+    pub fn install_essentials(&mut self, extra_programs: Option<Vec<&str>>) -> Result<()> {
+        self.shell.log("Starting essentials package install");
+        let mut essential_packages = vec![
+            "efibootmgr",
+            "os-prober",
+            "ntfs-3g",
+            "networkmanager",
+            "network-manager-applet",
+            "wireless_tools",
+            "wpa_supplicant",
+            "dialog",
+            "mtools",
+            "dosfstools",
+            "base-devel",
+            "linux-headers",
+            "bluez",
+            "bluez-utils",
+            "pulseaudio-bluetooth",
+            "alsa-utils",
+            "cups",
+            "neovim",
+        ];
+
+        if let Some(extras) = extra_programs {
+            essential_packages.extend(extras)
+        }
+
+        self.pacman.install(essential_packages)?;
+        self.shell.log("Completed essentials package install");
+
+        Ok(())
+    }
+
+    pub fn install_bootloader(&mut self) -> Result<()>{
+        match self.bootloader {
+            Bootloader::Grub => self.install_grub(),
+            Bootloader::SystemDBoot => self.install_systemdboot()
+        }
+    }
+
+    /// Installs and configures grub
+    /// Shouldn't be called from outside
+    /// Only one bootloader can be installed
+    fn install_grub(&mut self) -> Result<()>{
+
+        Ok(())
+    }
+
+
+    /// Installs and configures systemd-boot
+    /// Shouldn't be called from outside
+    /// Only one bootloader can be installed
+    fn install_systemdboot(&mut self) -> Result<()>{
+        Ok(())
     }
 
     /// Exits chroot

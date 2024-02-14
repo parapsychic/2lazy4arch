@@ -65,7 +65,6 @@ impl<'a> Filesystem<'a> {
                 ),
             );
         }
-        
 
         return Ok(());
     }
@@ -80,7 +79,7 @@ impl<'a> Filesystem<'a> {
             return Err(anyhow!("Boot or root is not set"));
         }
 
-        // mount root 
+        // mount root
         self.shell
             .run_and_wait_with_args("mount", &format!("{} /mnt", self.get_root().unwrap()))?;
 
@@ -97,11 +96,11 @@ impl<'a> Filesystem<'a> {
                             &mount_path
                         ));
                     } else {
-                        fs::create_dir(&mount_path)?;
+                        self.shell.run_and_wait_with_args(
+                            "mount",
+                            &format!("--mkdir {} {}", v, mount_path),
+                        )?;
                     }
-
-                    self.shell
-                        .run_and_wait_with_args("mount", &format!("{} {}", v, mount_path))?;
                 }
                 Err(e) => {
                     self.shell.log(&format!("Existence of {} cannot be confirmed. This is usually a permission error. Original Error: {:#?}", &mount_path, e));

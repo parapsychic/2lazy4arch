@@ -22,7 +22,8 @@ impl<'a> Pacman<'a> {
         Ok(())
     }
 
-    pub fn install(&mut self, packages: &str) -> Result<()>{
+    pub fn install(&mut self, packages: Vec<&str>) -> Result<()>{
+        let packages = packages.join(" ");
         let status = self.shell.run_and_wait_with_args("pacman", &format!("-Syu --noconfirm {}", packages))?;
         if !status.success(){
             self.shell.log(&format!("PACMAN: Could not install {}.", packages));

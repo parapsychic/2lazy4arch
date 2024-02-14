@@ -1,6 +1,9 @@
-use std::{process::{Child, Command, ExitStatus, Output}, fmt::Debug};
+use std::{
+    fmt::Debug,
+    process::{Child, Command, ExitStatus, Output, Stdio}, io::Write,
+};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use logger::Logger;
 pub mod logger;
 
@@ -20,13 +23,20 @@ pub struct ShellCmd {
     status: ExitStatus,
 }
 
-impl Debug for ShellCmd{
+impl Debug for ShellCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.status.success(){
-            f.debug_struct("ShellCmd").field("command", &self.command).field("stdout", &self.stdout).field("status", &self.status).finish()
-        }
-        else{
-            f.debug_struct("ShellCmd").field("command", &self.command).field("stderr", &self.stderr).field("status", &self.status).finish()
+        if self.status.success() {
+            f.debug_struct("ShellCmd")
+                .field("command", &self.command)
+                .field("stdout", &self.stdout)
+                .field("status", &self.status)
+                .finish()
+        } else {
+            f.debug_struct("ShellCmd")
+                .field("command", &self.command)
+                .field("stderr", &self.stderr)
+                .field("status", &self.status)
+                .finish()
         }
     }
 }
@@ -39,7 +49,7 @@ pub struct Shell<'a> {
     identifier: String,
     build_mode: RunMode,
     last_run_cmd: Option<ShellCmd>,
-    logger: &'a Logger
+    logger: &'a Logger,
 }
 
 impl<'a> Shell<'a> {
@@ -48,7 +58,7 @@ impl<'a> Shell<'a> {
             identifier: identifier.to_string(),
             build_mode: RunMode::Release,
             last_run_cmd: None,
-            logger
+            logger,
         }
     }
 
@@ -59,11 +69,11 @@ impl<'a> Shell<'a> {
         stdout: Option<&Vec<u8>>,
         stderr: Option<&Vec<u8>>,
     ) {
-        let null_vec : Vec<u8> = Vec::<u8>::new();
+        let null_vec: Vec<u8> = Vec::<u8>::new();
 
         let stdout_actual = match stdout {
             Some(x) => x,
-            None => &null_vec
+            None => &null_vec,
         };
 
         let stderr_actual = match stderr {
@@ -77,13 +87,13 @@ impl<'a> Shell<'a> {
             stderr: stderr_actual.to_vec(),
         });
     }
-    
+
     /// Logs using the shell's logger
-    pub fn log(&self, msg: &str){
+    pub fn log(&self, msg: &str) {
         self.logger.debug(&self.identifier, msg);
     }
 
-    /// Run the program without stdin. 
+    /// Run the program without stdin.
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
     pub fn run_with_args(&mut self, cmd: &str, args: &str) -> Result<Output> {
@@ -96,10 +106,19 @@ impl<'a> Shell<'a> {
             return Ok(output);
         }
         let output = Command::new(cmd).args(args_vec).output()?;
-        
-        if !output.status.success(){
-            self.log(&format!("{}: {} {:#?} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd, args));
-            return Err(anyhow!("{}: {} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd));
+
+        if !output.status.success() {
+            self.log(&format!(
+                "{}: {} {:#?} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd,
+                args
+            ));
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
         }
 
         self.set_last_command(
@@ -112,7 +131,7 @@ impl<'a> Shell<'a> {
         Ok(output)
     }
 
-    /// Run the program with given args without stdin. 
+    /// Run the program with given args without stdin.
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
     pub fn run(&mut self, cmd: &str) -> Result<Output> {
@@ -124,9 +143,12 @@ impl<'a> Shell<'a> {
         }
         let output = Command::new(cmd).output()?;
 
-        if !output.status.success(){
-            
-            return Err(anyhow!("{}: {} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd))
+        if !output.status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
         }
 
         self.set_last_command(
@@ -151,9 +173,12 @@ impl<'a> Shell<'a> {
 
         let status = Command::new(cmd).status()?;
 
-        if !status.success(){
-            
-            return Err(anyhow!("{}: {} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd))
+        if !status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
         }
 
         self.set_last_command(cmd, &status, None, None);
@@ -173,9 +198,12 @@ impl<'a> Shell<'a> {
         }
         let status = Command::new(cmd).args(args_vec).status()?;
 
-        if !status.success(){
-            
-            return Err(anyhow!("{}: {} failed. Exited with non-zero exit code", self.identifier.to_uppercase(), cmd))
+        if !status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
         }
 
         self.set_last_command(cmd, &status, None, None);
@@ -197,6 +225,33 @@ impl<'a> Shell<'a> {
 
         let child = Command::new(cmd).spawn()?;
         // spawned processes do not get saved.
+        Ok(child)
+    }
+
+    /// Spawn the program and do not wait for it.
+    /// Sends the arguments to the stdin. This works like a piped input.
+    /// Return a handle to the program.
+    /// Does not have access to output of the program and so does not raise any error on
+    /// unsuccessful exit.
+    pub fn spawn_with_piped_input(&mut self, cmd: &str, input: &str) -> Result<Child> {
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let child = Command::new("echo").arg("dummy").spawn()?;
+
+            // spawned processes do not get saved.
+            return Ok(child);
+        }
+
+        let mut child = Command::new(cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_ref())?; // drop would happen here
+        }
+
+
         Ok(child)
     }
 
