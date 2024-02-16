@@ -7,10 +7,9 @@ use crate::{
     utils::{append_to_file, write_to_file},
 };
 
-
-pub enum Bootloader{
+pub enum Bootloader {
     Grub,
-    SystemDBoot
+    SystemDBoot,
 }
 
 /// Essentials basically installs arch to be a bootable/usable state.
@@ -19,19 +18,19 @@ pub struct Essentials<'a> {
     is_chroot: bool,
     shell: Shell<'a>,
     pacman: Pacman<'a>,
-    bootloader: Bootloader
+    bootloader: Bootloader,
 }
 
 impl<'a> Essentials<'a> {
     pub fn new<'b>(logger: &'b Logger, bootloader: Bootloader) -> Essentials<'b> {
         let shell = Shell::new("Base Installer", logger);
         let pacman = Pacman::new(logger);
-         
+
         Essentials {
             is_chroot: false,
             shell,
             pacman,
-            bootloader
+            bootloader,
         }
     }
 
@@ -203,26 +202,35 @@ impl<'a> Essentials<'a> {
         Ok(())
     }
 
-    pub fn install_bootloader(&mut self) -> Result<()>{
+    pub fn install_bootloader(&mut self) -> Result<()> {
         match self.bootloader {
             Bootloader::Grub => self.install_grub(),
-            Bootloader::SystemDBoot => self.install_systemdboot()
+            Bootloader::SystemDBoot => self.install_systemdboot(),
         }
     }
 
     /// Installs and configures grub
     /// Shouldn't be called from outside
     /// Only one bootloader can be installed
-    fn install_grub(&mut self) -> Result<()>{
-
+    fn install_grub(&mut self) -> Result<()> {
+        self.shell.log("Installing grub");
+        self.shell
+            .log("os-prober is disabled, windows won't be recognized");
+        self.shell
+            .log("run grub-mkconfig again with edited grub file");
+        self.shell.run_and_wait_with_args(
+            "grub-install",
+            "--target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB",
+        )?;
+        self.shell
+            .run_and_wait_with_args("grub-mkconfig", "-o /boot/grub/grub.cfg")?;
         Ok(())
     }
-
 
     /// Installs and configures systemd-boot
     /// Shouldn't be called from outside
     /// Only one bootloader can be installed
-    fn install_systemdboot(&mut self) -> Result<()>{
+    fn install_systemdboot(&mut self) -> Result<()> {
         Ok(())
     }
 
