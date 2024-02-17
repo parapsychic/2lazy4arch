@@ -12,6 +12,11 @@ pub enum Bootloader {
     SystemDBoot,
 }
 
+pub enum SuperUserUtility {
+    Sudo,
+    Doas,
+}
+
 /// Essentials basically installs arch to be a bootable/usable state.
 /// This is same as the install.sh
 pub struct Essentials<'a> {
@@ -19,10 +24,18 @@ pub struct Essentials<'a> {
     shell: Shell<'a>,
     pacman: Pacman<'a>,
     bootloader: Bootloader,
+    super_user_utility: SuperUserUtility,
 }
 
 impl<'a> Essentials<'a> {
-    pub fn new<'b>(logger: &'b Logger, bootloader: Bootloader) -> Essentials<'b> {
+    /// Installs and sets up the system to be bootable and bare-minimum usable.
+    /// Calling all functions on this struct is usually called the end of installation.
+    /// Set the bootloader, Super user utility
+    pub fn new<'b>(
+        logger: &'b Logger,
+        bootloader: Bootloader,
+        super_user_utility: SuperUserUtility,
+    ) -> Essentials<'b> {
         let shell = Shell::new("Base Installer", logger);
         let pacman = Pacman::new(logger);
 
@@ -31,6 +44,7 @@ impl<'a> Essentials<'a> {
             shell,
             pacman,
             bootloader,
+            super_user_utility,
         }
     }
 
@@ -45,7 +59,7 @@ impl<'a> Essentials<'a> {
         self.shell
             .run_with_args("mount", "-t sysfs /sys /mnt/sys/")?;
         self.shell
-            .run_with_args("mount", "-o bind /dev /mnt/dev/ ")?;
+            .run_with_args("mount", "-o bind /dev /mnt/dev/")?;
         self.shell
             .run_with_args("mount", "-o bind /run /mnt/run/")?;
         self.shell.run_with_args(
@@ -127,6 +141,11 @@ impl<'a> Essentials<'a> {
     pub fn gen_locale(&mut self, locale: &str, encoding: &str) -> Result<()> {
         self.shell.log("Generating Locale");
 
+        if !self.is_chroot {
+            self.shell.log("Setting locale failed. Not in chroot.");
+            return Err(anyhow!("Setting locale failed. Not in chroot."));
+        }
+
         self.shell.log("Appending locale to fstab.");
 
         append_to_file("/etc/locale.gen", &format!("{} {}", locale, encoding))?;
@@ -137,6 +156,12 @@ impl<'a> Essentials<'a> {
     /// Sets the hostname and the hosts configuration
     pub fn set_hostname(&mut self, hostname: &str) -> Result<()> {
         self.shell.log("Setting hostname");
+
+        if !self.is_chroot {
+            self.shell.log("Setting hostname failed. Not in chroot.");
+            return Err(anyhow!("Setting hostname failed. Not in chroot."));
+        }
+
         write_to_file("/etc/hostname", hostname)?;
         self.shell.log("Setting hosts");
         append_to_file(
@@ -152,6 +177,12 @@ impl<'a> Essentials<'a> {
 
     pub fn mkinitcpio(&mut self) -> Result<()> {
         self.shell.log("Running mkinitcpio");
+
+        if !self.is_chroot {
+            self.shell.log("Cannot run mkinitcpio. Not in chroot.");
+            return Err(anyhow!("Cannot run mkinitcpio. Not in chroot."));
+        }
+
         self.shell.run_and_wait_with_args("mkinitcpio", "-P")?;
         self.shell.log("Completed mkinitcpio");
 
@@ -161,6 +192,12 @@ impl<'a> Essentials<'a> {
     /// set up root password
     pub fn set_password(&mut self, password: &str) -> Result<()> {
         self.shell.log("Setting password");
+
+        if !self.is_chroot {
+            self.shell.log("Cannot set password. Not in chroot.");
+            return Err(anyhow!("Cannot set password. Not in chroot."));
+        }
+
         self.shell
             .spawn_with_piped_input(&"chpasswd", &format!("root:{}", password))?;
         self.shell.log("Password set successfully.");
@@ -171,6 +208,13 @@ impl<'a> Essentials<'a> {
     /// installs the required programs
     pub fn install_essentials(&mut self, extra_programs: Option<Vec<&str>>) -> Result<()> {
         self.shell.log("Starting essentials package install");
+
+        if !self.is_chroot {
+            self.shell
+                .log("Cannot install essential packages. Not in chroot.");
+            return Err(anyhow!("Cannot install essential packages. Not in chroot."));
+        }
+
         let mut essential_packages = vec![
             "efibootmgr",
             "os-prober",
@@ -199,6 +243,14 @@ impl<'a> Essentials<'a> {
         self.pacman.install(essential_packages)?;
         self.shell.log("Completed essentials package install");
 
+        self.shell.log("Enabling Services");
+        self.shell
+            .run_and_wait_with_args("systemctl", "enable NetworkManager")?;
+        self.shell
+            .run_and_wait_with_args("systemctl", "enable bluetooth")?;
+
+        self.shell.log("Completed enabling Services");
+
         Ok(())
     }
 
@@ -213,7 +265,13 @@ impl<'a> Essentials<'a> {
     /// Shouldn't be called from outside
     /// Only one bootloader can be installed
     fn install_grub(&mut self) -> Result<()> {
-        self.shell.log("Installing grub");
+        self.shell.log("Installing Grub as the Bootloader");
+
+        if !self.is_chroot {
+            self.shell.log("Cannot install grub. Not in chroot.");
+            return Err(anyhow!("Cannot install grub. Not in chroot."));
+        }
+
         self.shell
             .log("os-prober is disabled, windows won't be recognized");
         self.shell
@@ -230,7 +288,95 @@ impl<'a> Essentials<'a> {
     /// Installs and configures systemd-boot
     /// Shouldn't be called from outside
     /// Only one bootloader can be installed
+    /// Does not support  Secure boot. TODO
     fn install_systemdboot(&mut self) -> Result<()> {
+        self.shell.log("Installing SystemD Boot as the Bootloader");
+        // TODO: Show this to user instead of logging.
+        self.shell.log("This mode does not support secure boot. If you have secure boot installed, you might want to set up [signing the bootloader](https://wiki.archlinux.org/title/Systemd-boot#Signing_for_Secure_Boot).");
+
+        if !self.is_chroot {
+            self.shell
+                .log("Cannot install systemd-boot. Not in chroot.");
+            return Err(anyhow!("Cannot install systemd-boot. Not in chroot."));
+        }
+
+        self.shell.run_and_wait_with_args("bootctl", "install")?;
+        self.shell
+            .run_and_wait_with_args("systemctl", "enable systemd-boot-update.service")?;
+        write_to_file(
+            "/boot/loader/loader.conf",
+            "default  arch.conf
+timeout  4
+console-mode max
+editor   no",
+        )?;
+
+        // find the uuid by looking at the fstab
+        // write default entry
+        write_to_file(
+            "/loader/entries/arch.conf",
+            &format!(
+                "title   Arch Linux (fallback initramfs)
+linux   /vmlinuz-linux
+initrd  /{}.img
+initrd  /initramfs-linux-fallback.img
+options root=UUID={} rw",
+                processor_ucode, uuid
+            ),
+        )?;
+
+        // write default entry
+        write_to_file(
+            "/loader/entries/arch.conf",
+            &format!(
+                "title   Arch Linux (fallback initramfs)
+linux   /vmlinuz-linux
+initrd  /{}.img
+initrd  /initramfs-linux-fallback.img
+options root=UUID={} rw",
+                processor_ucode, uuid
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Adds a new user, sets permissions, installs and sets up the super user utility.
+    pub fn user_management(&mut self, user: &str, password: &str) -> Result<()> {
+        self.shell.log("Setting up User Management");
+
+        if !self.is_chroot {
+            self.shell
+                .log("Cannot install essential packages. Not in chroot.");
+            return Err(anyhow!("Cannot install essential packages. Not in chroot."));
+        }
+
+        self.shell
+            .run_and_wait_with_args("useradd", &format!("-mG wheel {}", user))?;
+        self.shell
+            .spawn_with_piped_input(&"chpasswd", &format!("{}:{}", user, password))?;
+        self.shell.log("Password set successfully.");
+
+        self.shell.log("Adding wheel to sudoers");
+
+        match self.super_user_utility {
+            // I think sudo is already installed during the base build
+            // if not it will be installed during some package install as a dependency
+            SuperUserUtility::Sudo => {
+                self.shell.run_and_wait_with_args(
+                    "sed",
+                    "-i \"82 i %wheel ALL=(ALL) ALL\" /etc/sudoers",
+                )?;
+            }
+            SuperUserUtility::Doas => {
+                self.pacman.install(vec!["opendoas"])?;
+                write_to_file(
+                    "/etc/doas.conf",
+                    "permit setenv { XAUTHORITY LANG LC_ALL } persist :wheel as root",
+                )?;
+                unix::fs::symlink("/usr/bin/doas", "/usr/bin/sudo")?;
+            }
+        }
+
         Ok(())
     }
 
@@ -239,6 +385,11 @@ impl<'a> Essentials<'a> {
     /// Follows the guide [here](https://wiki.archlinux.org/title/Chroot#Using_chroot)
     pub fn exit_chroot(&mut self) -> Result<()> {
         self.shell.log("Started exit chroot.");
+
+        if !self.is_chroot {
+            self.shell.log("Cannot exit chroot: Not in chroot.");
+            return Err(anyhow!("Cannot exit chroot: Not in chroot."));
+        }
 
         self.shell.run_and_wait("exit")?;
         std::env::set_current_dir("/")?;
