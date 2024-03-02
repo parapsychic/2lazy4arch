@@ -1,29 +1,25 @@
-use std::{io, process};
 use anyhow::Result;
+use std::{io, process};
 
-use installer::{filesystem_tasks::Filesystem, pacman::Pacman, base_installer::BaseInstaller, utils::{get_processor_make, get_uuid_root}};
+use installer::{base_installer::BaseInstaller, filesystem_tasks::Filesystem, pacman::Pacman};
 use shell_iface::logger::Logger;
 
 // This file will be rewritten to be a TUI.
 // Currently, I'm testing using the main.
 fn main() {
-      println!("{}", get_processor_make().unwrap());
-      println!("{}", get_uuid_root().unwrap());
-//    let logger = Logger::new(true);
-//    let mut filesystem = Filesystem::new(&logger);
-//    match demo(&mut filesystem, &logger) {
-//        Ok(_) => {},
-//        Err(_) => {
-//            filesystem.try_unmount();
-//        },
-//    }
+    let logger = Logger::new(true);
+    let mut filesystem = Filesystem::new(&logger);
+    match demo(&mut filesystem, &logger) {
+        Ok(_) => {}
+        Err(_) => {
+            filesystem.try_unmount();
+        }
+    }
 }
 
-fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
-
+fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()> {
     let mut buffer = String::new();
     let stdin = io::stdin();
-
 
     /* LIVE PRESETUP */
     let mut pacman = Pacman::new(logger);
@@ -35,13 +31,10 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
         pacman.run_reflector(&buffer.clone()).unwrap();
     }
 
-
-
     /* FILESYSTEM TASKS */
     /* Creating partitions
      * Formatting partitions
      * Mounting partitions */
-
 
     // Creating partitions with cfdisk
     loop {
@@ -142,7 +135,7 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
                 }
             }
         }
-        
+
         // prompt user to confirm
         println!(
             "/boot: {}\n/root: {}\n/home: {}",
@@ -164,7 +157,9 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
             break;
         }
 
-        println!("Clearing all partitions. In the end tui, only specific mount points will be cleared.");
+        println!(
+            "Clearing all partitions. In the end tui, only specific mount points will be cleared."
+        );
         filesystem.clear_mounts();
     }
 
@@ -188,9 +183,8 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
         filesystem.mount_partitions().unwrap();
     }
 
-    
     /* BASE INSTALLATION */
-    let mut base_installer = BaseInstaller::new(logger); 
+    let mut base_installer = BaseInstaller::new(logger);
 
     // Install base packages
     {
@@ -203,8 +197,7 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{
     }
 
     // chroot
-    {
-    }
-    
+    {}
+
     Ok(())
 }
