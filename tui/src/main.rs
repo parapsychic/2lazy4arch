@@ -1,20 +1,22 @@
 use std::{io, process};
 use anyhow::Result;
 
-use installer::{filesystem_tasks::Filesystem, pacman::Pacman, base_installer::BaseInstaller};
+use installer::{filesystem_tasks::Filesystem, pacman::Pacman, base_installer::BaseInstaller, utils::{get_processor_make, get_uuid_root}};
 use shell_iface::logger::Logger;
 
 // This file will be rewritten to be a TUI.
 // Currently, I'm testing using the main.
 fn main() {
-    let logger = Logger::new(true);
-    let mut filesystem = Filesystem::new(&logger);
-    match demo(&mut filesystem, &logger) {
-        Ok(_) => {},
-        Err(_) => {
-            filesystem.try_unmount();
-        },
-    }
+      println!("{}", get_processor_make().unwrap());
+      println!("{}", get_uuid_root().unwrap());
+//    let logger = Logger::new(true);
+//    let mut filesystem = Filesystem::new(&logger);
+//    match demo(&mut filesystem, &logger) {
+//        Ok(_) => {},
+//        Err(_) => {
+//            filesystem.try_unmount();
+//        },
+//    }
 }
 
 fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()>{

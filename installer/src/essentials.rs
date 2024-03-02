@@ -4,7 +4,7 @@ use std::{fs, os::unix};
 
 use crate::{
     pacman::Pacman,
-    utils::{append_to_file, write_to_file},
+    utils::{append_to_file, get_processor_make, get_uuid_root, write_to_file},
 };
 
 pub enum Bootloader {
@@ -175,6 +175,7 @@ impl<'a> Essentials<'a> {
         Ok(())
     }
 
+    /// Runs mkinicpio
     pub fn mkinitcpio(&mut self) -> Result<()> {
         self.shell.log("Running mkinitcpio");
 
@@ -190,8 +191,8 @@ impl<'a> Essentials<'a> {
     }
 
     /// set up root password
-    pub fn set_password(&mut self, password: &str) -> Result<()> {
-        self.shell.log("Setting password");
+    pub fn set_password(&mut self, user: &str, password: &str) -> Result<()> {
+        self.shell.log(&format!("Setting password for {}", user));
 
         if !self.is_chroot {
             self.shell.log("Cannot set password. Not in chroot.");
@@ -199,7 +200,7 @@ impl<'a> Essentials<'a> {
         }
 
         self.shell
-            .spawn_with_piped_input(&"chpasswd", &format!("root:{}", password))?;
+            .spawn_with_piped_input(&"chpasswd", &format!("{}:{}", user, password))?;
         self.shell.log("Password set successfully.");
 
         Ok(())
@@ -301,6 +302,7 @@ impl<'a> Essentials<'a> {
         }
 
         self.shell.run_and_wait_with_args("bootctl", "install")?;
+
         self.shell
             .run_and_wait_with_args("systemctl", "enable systemd-boot-update.service")?;
         write_to_file(
@@ -311,32 +313,51 @@ console-mode max
 editor   no",
         )?;
 
-        // find the uuid by looking at the fstab
-        // write default entry
-        write_to_file(
-            "/loader/entries/arch.conf",
-            &format!(
+        let uuid = get_uuid_root()?;
+        let default_conf;
+        let fallback_conf;
+
+        // bad code, idc.
+        // basically decides whether to load a ucode or not.
+        if let Some(processor) = get_processor_make() {
+            default_conf = format!(
+                "title   Arch Linux 
+linux   /vmlinuz-linux
+initrd  /{}-ucode.img
+initrd  /initramfs-linux.img
+options root=UUID={} rw",
+                processor, uuid
+            );
+            fallback_conf = format!(
                 "title   Arch Linux (fallback initramfs)
 linux   /vmlinuz-linux
-initrd  /{}.img
+initrd  /{}-ucode.img
 initrd  /initramfs-linux-fallback.img
 options root=UUID={} rw",
-                processor_ucode, uuid
-            ),
-        )?;
+                processor, uuid
+            );
+        } else {
+            default_conf = format!(
+                "title   Arch Linux 
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=UUID={} rw",
+                uuid
+            );
+            fallback_conf = format!(
+                "title   Arch Linux (fallback initramfs)
+linux   /vmlinuz-linux
+initrd  /initramfs-linux-fallback.img
+options root=UUID={} rw",
+                uuid
+            );
+        }
 
         // write default entry
-        write_to_file(
-            "/loader/entries/arch.conf",
-            &format!(
-                "title   Arch Linux (fallback initramfs)
-linux   /vmlinuz-linux
-initrd  /{}.img
-initrd  /initramfs-linux-fallback.img
-options root=UUID={} rw",
-                processor_ucode, uuid
-            ),
-        )?;
+        write_to_file("/loader/entries/arch.conf", &default_conf)?;
+
+        // write default entry
+        write_to_file("/loader/entries/arch-fallback.conf", &fallback_conf)?;
         Ok(())
     }
 
@@ -352,8 +373,7 @@ options root=UUID={} rw",
 
         self.shell
             .run_and_wait_with_args("useradd", &format!("-mG wheel {}", user))?;
-        self.shell
-            .spawn_with_piped_input(&"chpasswd", &format!("{}:{}", user, password))?;
+        self.set_password(user, password)?;
         self.shell.log("Password set successfully.");
 
         self.shell.log("Adding wheel to sudoers");

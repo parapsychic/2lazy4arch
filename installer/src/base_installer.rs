@@ -3,6 +3,8 @@ use std::{fs::OpenOptions, io::Write};
 use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
+use crate::utils::get_processor_make;
+
 /* This module contains all the utility fns for smaller base installation. */
 pub struct BaseInstaller<'a> {
     shell: Shell<'a>,
@@ -15,13 +17,16 @@ impl<'a> BaseInstaller<'a> {
     }
 
     /// Installs the base packages
-    /// TODO: amd-ucode/intel-ucode
     pub fn base_packages_install(&mut self) -> Result<()> {
-       self.shell.log(&"Installing base packages.");
-        match self
-            .shell
-            .run_and_wait_with_args("pacstrap", "-K /mnt base linux linux-firmware")
-        {
+        self.shell.log(&"Installing base packages.");
+
+        let package_cmd = if let Some(p) = get_processor_make() {
+            format!("-K /mnt base linux linux-firmware {}-code", p)
+        } else {
+            String::from("-K /mnt base linux linux-firmware")
+        };
+
+        match self.shell.run_and_wait_with_args("pacstrap", &package_cmd) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.shell.log(&format!(
@@ -35,7 +40,7 @@ impl<'a> BaseInstaller<'a> {
 
     /// Generates and Writes fstab configuration.
     pub fn genfstab(&mut self) -> Result<()> {
-       self.shell.log(&"Generating fstab.");
+        self.shell.log(&"Generating fstab.");
         let output = self.shell.run_with_args("genfstab", "-U /mnt")?;
 
         let mut fstab = match OpenOptions::new()
