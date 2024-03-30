@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.79"
+nix = {version="0.28.0", features=["user"]}
 shell-iface = { path = '../shell-iface' }

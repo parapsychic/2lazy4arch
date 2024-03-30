@@ -131,6 +131,45 @@ impl<'a> Shell<'a> {
         Ok(output)
     }
 
+
+    /// Run the program without stdin inside a directory
+    /// Collect stdout and stderr and store it in Output.
+    /// Raises error if exited with non-zero code.
+    pub fn run_with_args_in_directory(&mut self, dir: &str, cmd: &str, args: &str) -> Result<Output> {
+        let args_vec = shell_words::split(args)?;
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {} {:#?}", cmd, args);
+
+            let output = Command::new("echo").current_dir(dir).arg("dummy").output()?;
+            self.set_last_command(cmd, &output.status, None, None);
+            return Ok(output);
+        }
+        let output = Command::new(cmd).args(args_vec).current_dir(dir).output()?;
+
+        if !output.status.success() {
+            self.log(&format!(
+                "{}: {} {:#?} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd,
+                args
+            ));
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
+        }
+
+        self.set_last_command(
+            cmd,
+            &output.status,
+            Some(&output.stdout),
+            Some(&output.stderr),
+        );
+
+        Ok(output)
+    }
+
     /// Run the program with given args without stdin.
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
@@ -138,6 +177,35 @@ impl<'a> Shell<'a> {
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
             let output = Command::new("echo").arg("dummy").output()?;
+            self.set_last_command(cmd, &output.status, None, None);
+            return Ok(output);
+        }
+        let output = Command::new(cmd).output()?;
+
+        if !output.status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
+        }
+
+        self.set_last_command(
+            cmd,
+            &output.status,
+            Some(&output.stdout),
+            Some(&output.stderr),
+        );
+        Ok(output)
+    }
+    
+    /// Run the program with given args without stdin inside a directory
+    /// Collect stdout and stderr and store it in Output.
+    /// Raises error if exited with non-zero code.
+    pub fn run_in_directory(&mut self, dir: &str, cmd: &str) -> Result<Output> {
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let output = Command::new("echo").arg("dummy").current_dir(dir).output()?;
             self.set_last_command(cmd, &output.status, None, None);
             return Ok(output);
         }
@@ -185,6 +253,32 @@ impl<'a> Shell<'a> {
         Ok(status)
     }
 
+
+    /// Run the program with stdin inside a directory
+    /// Only status is returned, not the output.
+    /// Raises error if exited with non-zero code.
+    pub fn run_in_directory_and_wait(&mut self, dir:&str, cmd: &str) -> Result<ExitStatus> {
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let output = Command::new("echo").current_dir(dir).status()?;
+            self.set_last_command(cmd, &output, None, None);
+            return Ok(output);
+        }
+
+        let status = Command::new(cmd).current_dir(dir).status()?;
+
+        if !status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
+        }
+
+        self.set_last_command(cmd, &status, None, None);
+        Ok(status)
+    }
+
     /// Run the program with given args with stdin.
     /// Only status is returned, not the output.
     /// Raises error if exited with non-zero code.
@@ -197,6 +291,31 @@ impl<'a> Shell<'a> {
             return Ok(status);
         }
         let status = Command::new(cmd).args(args_vec).status()?;
+
+        if !status.success() {
+            return Err(anyhow!(
+                "{}: {} failed. Exited with non-zero exit code",
+                self.identifier.to_uppercase(),
+                cmd
+            ));
+        }
+
+        self.set_last_command(cmd, &status, None, None);
+        Ok(status)
+    }
+
+    /// Run the program with given args with stdin inside a directory
+    /// Only status is returned, not the output.
+    /// Raises error if exited with non-zero code.
+    pub fn run_in_directory_and_wait_with_args(&mut self, dir:&str, cmd: &str, args: &str) -> Result<ExitStatus> {
+        let args_vec = shell_words::split(args)?;
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let status = Command::new("echo").arg("dummy").current_dir(dir).status()?;
+            self.set_last_command(cmd, &status, None, None);
+            return Ok(status);
+        }
+        let status = Command::new(cmd).args(args_vec).current_dir(dir).status()?;
 
         if !status.success() {
             return Err(anyhow!(
@@ -224,6 +343,24 @@ impl<'a> Shell<'a> {
         }
 
         let child = Command::new(cmd).spawn()?;
+        // spawned processes do not get saved.
+        Ok(child)
+    }
+    
+    /// Spawn the program and do not wait for it in directory
+    /// Return a handle to the program.
+    /// Does not have access to output of the program and so does not raise any error on
+    /// unsuccessful exit.
+    pub fn spawn_in_directory(&mut self, dir: &str, cmd: &str) -> Result<Child> {
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let child = Command::new("echo").current_dir(dir).spawn()?;
+
+            // spawned processes do not get saved.
+            return Ok(child);
+        }
+
+        let child = Command::new(cmd).current_dir(dir).spawn()?;
         // spawned processes do not get saved.
         Ok(child)
     }
@@ -255,6 +392,34 @@ impl<'a> Shell<'a> {
         Ok(child)
     }
 
+    /// Spawn the program and do not wait for it inside a directory
+    /// Sends the arguments to the stdin. This works like a piped input.
+    /// Return a handle to the program.
+    /// Does not have access to output of the program and so does not raise any error on
+    /// unsuccessful exit.
+    pub fn spawn_in_directory_with_piped_input(&mut self, dir: &str, cmd: &str, input: &str) -> Result<Child> {
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let child = Command::new("echo").arg("dummy").current_dir(dir).spawn()?;
+
+            // spawned processes do not get saved.
+            return Ok(child);
+        }
+
+        let mut child = Command::new(cmd)
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_ref())?; // drop would happen here
+        }
+
+
+        Ok(child)
+    }
+
     /// Spawn the program with the given args and do not wait for it.
     /// Return a handle to the program.
     /// Does not have access to output of the program and so does not raise any error on
@@ -267,6 +432,22 @@ impl<'a> Shell<'a> {
             return Ok(child);
         }
         let child = Command::new(cmd).args(args_vec).spawn()?;
+        // spawned processes do not get saved.
+        Ok(child)
+    }
+
+    /// Spawn the program with the given args and do not wait for it inside a directory
+    /// Return a handle to the program.
+    /// Does not have access to output of the program and so does not raise any error on
+    /// unsuccessful exit.
+    pub fn spawn_in_directory_with_args(&mut self, dir:&str, cmd: &str, args: &str) -> Result<Child> {
+        let args_vec = shell_words::split(args)?;
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {}", cmd);
+            let child = Command::new("echo").arg("dummy").current_dir(dir).spawn()?;
+            return Ok(child);
+        }
+        let child = Command::new(cmd).args(args_vec).current_dir(dir).spawn()?;
         // spawned processes do not get saved.
         Ok(child)
     }

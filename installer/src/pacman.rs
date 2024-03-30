@@ -1,20 +1,53 @@
 use anyhow::{anyhow, Result};
+use nix::unistd::Uid;
 use shell_iface::{logger::Logger, Shell};
 
 pub struct Pacman<'a> {
     shell: Shell<'a>,
+    /// specifies whether this is running on the live/installer environment
+    /// or the acutal installed machine
+    is_non_root: bool,
+    program: String,
 }
 
 impl<'a> Pacman<'a> {
     pub fn new<'b>(logger: &'b Logger) -> Pacman<'b> {
+        let is_non_root = !Uid::effective().is_root();
+
         let shell = Shell::new("Pacman", logger);
-        Pacman { shell }
+        Pacman {
+            shell,
+            is_non_root,
+            program: String::from("pacman"),
+        }
+    }
+
+    pub fn yay(&mut self) -> &mut Self {
+        self.program = String::from("yay");
+        return self;
+    }
+
+    pub fn pacman(&mut self) -> &mut Self {
+        self.program = String::from("pacman");
+        return self;
     }
 
     pub fn update_mirrors(&mut self) -> Result<()> {
-        let status = self
-            .shell
-            .run_and_wait_with_args("pacman", "-Syyy --noconfirm")?;
+        let status = if self.is_non_root {
+            self.shell.run_and_wait_with_args(
+                "su",
+                &format!("-c \"{} -Syyy --noconfirm\"", self.program),
+            )?
+        } else {
+            if self.program == "yay" {
+                self.shell.log("ERROR: Called YAY as root.");
+                return Err(anyhow!("PACMAN: Called yay as root"));
+            }
+
+            self.shell
+                .run_and_wait_with_args("pacman", "-Syyy --noconfirm")?
+        };
+
         if !status.success() {
             self.shell
                 .log("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
@@ -26,12 +59,23 @@ impl<'a> Pacman<'a> {
     pub fn install(&mut self, packages: Vec<&str>) -> Result<()> {
         let packages = packages.join(" ");
 
-        self.shell
-            .log(&format!("Installing {}.", packages));
+        self.shell.log(&format!("Installing {}.", packages));
 
-        let status = self
-            .shell
-            .run_and_wait_with_args("pacman", &format!("-Syu --noconfirm {}", packages))?;
+        let status = if self.is_non_root {
+            self.shell.run_and_wait_with_args(
+                "su",
+                &format!("-c \"{} -Syu --noconfirm {}\"", self.program, packages),
+            )?
+        } else {
+            if self.program == "yay" {
+                self.shell.log("ERROR: Called YAY as root.");
+                return Err(anyhow!("PACMAN: Called yay as root"));
+            }
+
+            self.shell
+                .run_and_wait_with_args("pacman", &format!("-Syu --noconfirm {}", packages))?
+        };
+
         if !status.success() {
             self.shell
                 .log(&format!("PACMAN: Could not install {}.", packages));
@@ -43,12 +87,23 @@ impl<'a> Pacman<'a> {
 
     pub fn uninstall(&mut self, packages: Vec<&str>) -> Result<()> {
         let packages = packages.join(" ");
-        self.shell
-            .log(&format!("Uninstalling {}.", packages));
+        self.shell.log(&format!("Uninstalling {}.", packages));
 
-        let status = self
-            .shell
-            .run_and_wait_with_args("pacman", &format!("-Rns --noconfirm {}", packages))?;
+        let status = if self.is_non_root {
+            self.shell.run_and_wait_with_args(
+                "su",
+                &format!("-c \"{} -Rns --noconfirm {}\"", self.program, packages),
+            )?
+        } else {
+
+            if self.program == "yay" {
+                self.shell.log("ERROR: Called YAY as root.");
+                return Err(anyhow!("PACMAN: Called yay as root"));
+            }
+            self.shell
+                .run_and_wait_with_args("pacman", &format!("-Rns --noconfirm {}", packages))?
+        };
+
         if !status.success() {
             self.shell
                 .log(&format!("Could not uninstall {}.", packages));
@@ -61,10 +116,20 @@ impl<'a> Pacman<'a> {
     /// newer arch isos include reflector by default. this should be used in the live environment
     /// only. Using it in chroot without reflector installed might panic.
     pub fn run_reflector(&mut self, country: &str) -> Result<()> {
-        let status = self.shell.run_and_wait_with_args(
-            "reflector",
-            &format!("-c {} --sort rate --save /etc/pacman.d/mirrorlist", country),
-        )?;
+        let status = if self.is_non_root {
+            self.shell.run_and_wait_with_args(
+                "su",
+                &format!(
+                    "-c \"reflector -c {} --sort rate --save /etc/pacman.d/mirrorlist\"",
+                    country
+                ),
+            )?
+        } else {
+            self.shell.run_and_wait_with_args(
+                "reflector",
+                &format!("-c {} --sort rate --save /etc/pacman.d/mirrorlist", country),
+            )?
+        };
 
         if !status.success() {
             self.shell

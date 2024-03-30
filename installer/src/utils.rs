@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Write, self, BufReader, BufRead},
 };
 
 use anyhow::{anyhow, Result};
@@ -35,6 +35,29 @@ pub fn append_to_file(path: &str, content: &str) -> Result<()> {
 
     if let Err(e) = fstab.write(format!("\n{}", content).as_bytes()) {
         return Err(anyhow!(e));
+    }
+
+    Ok(())
+}
+
+/// Glorified sed function to insert lines at specified line number.
+/// This can in theory do the same stuff as append and write.
+pub fn sed(file_path: &str, line_number: usize, line_content: &str) -> io::Result<()> {
+    let file = fs::File::open(file_path)?;
+    let reader = BufReader::new(file);
+
+    let mut lines = reader.lines().collect::<io::Result<Vec<String>>>()?;
+
+    if line_number <= lines.len() {
+        lines.insert(line_number - 1, line_content.to_string());
+    } else {
+        lines.push(line_content.to_string());
+    }
+
+    let mut new_file = fs::File::create(file_path)?;
+
+    for line in lines {
+        writeln!(new_file, "{}", line)?;
     }
 
     Ok(())

@@ -1,12 +1,12 @@
 use anyhow::Result;
 use std::{io, process};
 
-use installer::{base_installer::BaseInstaller, filesystem_tasks::Filesystem, pacman::Pacman};
+use installer::{base_installer::BaseInstaller, filesystem_tasks::Filesystem, pacman::Pacman, post_install::PostInstall};
 use shell_iface::logger::Logger;
 
 // This file will be rewritten to be a TUI.
 // Currently, I'm testing using the main.
-fn main() {
+fn install() {
     let logger = Logger::new(true);
     let mut filesystem = Filesystem::new(&logger);
     match demo(&mut filesystem, &logger) {
@@ -200,4 +200,15 @@ fn demo(filesystem: &mut Filesystem, logger: &Logger) -> Result<()> {
     {}
 
     Ok(())
+}
+
+fn post_install(){
+    let logger = Logger::new(true);
+    let mut post_installer = PostInstall::new(&logger);
+
+    post_installer.setup_yay().unwrap();
+}
+
+fn main(){
+   post_install(); 
 }
