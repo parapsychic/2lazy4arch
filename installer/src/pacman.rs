@@ -2,12 +2,17 @@ use anyhow::{anyhow, Result};
 use nix::unistd::Uid;
 use shell_iface::{logger::Logger, Shell};
 
+enum PackageManager{
+    Pacman,
+    Yay
+}
+
 pub struct Pacman<'a> {
     shell: Shell<'a>,
     /// specifies whether this is running on the live/installer environment
     /// or the acutal installed machine
     is_non_root: bool,
-    program: String,
+    program: PackageManager,
 }
 
 impl<'a> Pacman<'a> {
@@ -18,17 +23,17 @@ impl<'a> Pacman<'a> {
         Pacman {
             shell,
             is_non_root,
-            program: String::from("pacman"),
+            program: PackageManager::Pacman
         }
     }
 
     pub fn yay(&mut self) -> &mut Self {
-        self.program = String::from("yay");
+        self.program = PackageManager::Yay;
         return self;
     }
 
     pub fn pacman(&mut self) -> &mut Self {
-        self.program = String::from("pacman");
+        self.program = PackageManager::Pacman;
         return self;
     }
 
@@ -36,10 +41,10 @@ impl<'a> Pacman<'a> {
         let status = if self.is_non_root {
             self.shell.run_and_wait_with_args(
                 "su",
-                &format!("-c \"{} -Syyy --noconfirm\"", self.program),
+                &format!("-c \"{} -Syyy --noconfirm\"", self.get_program()),
             )?
         } else {
-            if self.program == "yay" {
+            if let PackageManager::Yay = self.program {
                 self.shell.log("ERROR: Called YAY as root.");
                 return Err(anyhow!("PACMAN: Called yay as root"));
             }
@@ -64,10 +69,10 @@ impl<'a> Pacman<'a> {
         let status = if self.is_non_root {
             self.shell.run_and_wait_with_args(
                 "su",
-                &format!("-c \"{} -Syu --noconfirm {}\"", self.program, packages),
+                &format!("-c \"{} -Syu --noconfirm {}\"", self.get_program(), packages),
             )?
         } else {
-            if self.program == "yay" {
+            if let PackageManager::Yay = self.program {
                 self.shell.log("ERROR: Called YAY as root.");
                 return Err(anyhow!("PACMAN: Called yay as root"));
             }
@@ -92,11 +97,11 @@ impl<'a> Pacman<'a> {
         let status = if self.is_non_root {
             self.shell.run_and_wait_with_args(
                 "su",
-                &format!("-c \"{} -Rns --noconfirm {}\"", self.program, packages),
+                &format!("-c \"{} -Rns --noconfirm {}\"", self.get_program(), packages),
             )?
         } else {
 
-            if self.program == "yay" {
+            if let PackageManager::Yay = self.program {
                 self.shell.log("ERROR: Called YAY as root.");
                 return Err(anyhow!("PACMAN: Called yay as root"));
             }
@@ -142,5 +147,13 @@ impl<'a> Pacman<'a> {
         self.update_mirrors()?;
 
         Ok(())
+    }
+
+
+    fn get_program(&self) -> &str {
+        match self.program {
+            PackageManager::Pacman => &"pacman",
+            PackageManager::Yay => &"yay",
+        }
     }
 }

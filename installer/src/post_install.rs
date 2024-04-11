@@ -1,8 +1,16 @@
 use std::fs;
 
-use crate::{pacman::Pacman, utils::sed};
+use crate::{pacman::Pacman, utils::{sed, DWM_SCRIPT_URL, RICE_SCRIPT_URL}};
 use anyhow::Result;
 use shell_iface::{logger::Logger, Shell};
+
+/// Preferred GUI
+pub enum DesktopEnvironment {
+    Gnome,
+    KDE,
+    DWM,
+    Hyprland,
+}
 
 /// PostInstall installs optional stuff.
 /// This is same as the postinstall.sh
@@ -19,7 +27,11 @@ impl<'a> PostInstall<'a> {
         let shell = Shell::new("PostInstall", logger);
         let pacman = Pacman::new(logger);
 
-        PostInstall { shell, pacman, is_yay_installed: false }
+        PostInstall {
+            shell,
+            pacman,
+            is_yay_installed: false,
+        }
     }
 
     /// reads from a file and installs all the packages.
@@ -27,13 +39,20 @@ impl<'a> PostInstall<'a> {
     /// packages file uses pacman to install.
     /// aur packages file uses yay to install
     /// A valid file contains valid package names separated by a newline only
-    pub fn install_additionals(&mut self, packages_file: &str, aur_packages_file: &str) -> Result<()> {
+    pub fn install_additionals(
+        &mut self,
+        packages_file: &str,
+        aur_packages_file: &str,
+    ) -> Result<()> {
         let parsed_file = fs::read_to_string(packages_file)?;
         let packages = parsed_file.split("\n").collect::<Vec<&str>>();
-        self.shell.log(&format!("Installing packages with pacman: {}", parsed_file));
+        self.shell.log(&format!(
+            "Installing pac--noconfirm kages with pacman: {}",
+            parsed_file
+        ));
         self.pacman.pacman().install(packages)?;
 
-        if self.is_yay_installed{
+        if self.is_yay_installed {
             self.shell.log("Installing yay");
             self.setup_yay()?;
         }
@@ -41,8 +60,9 @@ impl<'a> PostInstall<'a> {
         self.shell.log("Installing yay");
         let parsed_file = fs::read_to_string(aur_packages_file)?;
         let aur_packages = parsed_file.split("\n").collect::<Vec<&str>>();
-        self.shell.log(&format!("Installing packages with aur: {}", parsed_file));
-        self.pacman.pacman().install(aur_packages)?;
+        self.shell
+            .log(&format!("Installing packages with aur: {}", parsed_file));
+        self.pacman.yay().install(aur_packages)?;
         Ok(())
     }
 
@@ -62,19 +82,71 @@ impl<'a> PostInstall<'a> {
         self.shell
             .run_and_wait_with_args("git", "clone https://aur.archlinux.org/yay.git")?;
 
-        self.shell
-            .run_in_directory_and_wait_with_args("yay", "makepkg", "-si PKGBUILD")?;
-        
+        self.shell.run_in_directory_and_wait_with_args(
+            "yay",
+            "makepkg",
+            "-si --noconfirm PKGBUILD",
+        )?;
+
         self.is_yay_installed = true;
+        Ok(())
+    }
+
+    /// Installs the desktop environment.
+    pub fn install_desktop(&mut self, de: DesktopEnvironment) -> Result<()> {
+        self.shell.log("Installing desktop environment");
+
+        match de {
+            DesktopEnvironment::Gnome => {
+                self.shell.log("Installing gnome");
+                self.pacman
+                    .pacman()
+                    .install(vec![&"gnome", &"gnome-extra"])?;
+            }
+            DesktopEnvironment::KDE => {
+                self.shell.log("Installing kde");
+                self.pacman
+                    .pacman()
+                    .install(vec![&"plasma", &"kde-applications-meta"])?;
+            }
+            DesktopEnvironment::DWM => {
+                self.shell.log("Installing dwm");
+                self.install_dwm();
+            }
+            DesktopEnvironment::Hyprland => {
+                self.shell.log("Installing hyprland");
+                self.pacman
+                    .yay()
+                    .install(vec![&"hyprland-git", &"hyprpaper"])?;
+            }
+        }
+
         Ok(())
     }
 
     /// good to haves.
     /// includes specific stuff for me
     pub fn misc_options(&mut self) -> Result<()> {
+        self.shell.log("Running ParaPsychic specific settings...");
         self.shell.log("Setting up pacman in style");
         sed("/etc/pacman.conf", 33, "ILoveCandy")?;
         sed("/etc/pacman.conf", 34, "Color")?;
+
+        self.shell.log("Downloading ricing scripts...");
+        self.shell.run_and_wait_with_args("curl", &format!("{} -o rice", RICE_SCRIPT_URL))?;
+        self.shell.run_and_wait_with_args("chmod", "+x install_dwm")?;
+        self.shell.run("./rice")?;
+        self.shell.log("Ricing...");
+
+        Ok(())
+    }
+
+    fn install_dwm(&mut self) -> Result<()> {
+        self.shell.log("Downloading dwm...");
+        self.shell.run_and_wait_with_args("curl", &format!("{} -o install_dwm", DWM_SCRIPT_URL))?;
+        self.shell.run_and_wait_with_args("chmod", "+x install_dwm")?;
+        self.shell.run("./install_dwm")?;
+        self.shell.log("Installed dwm.");
 
         Ok(())
     }

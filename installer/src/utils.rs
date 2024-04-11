@@ -5,6 +5,9 @@ use std::{
 
 use anyhow::{anyhow, Result};
 
+pub const DWM_SCRIPT_URL : &str = "";
+pub const RICE_SCRIPT_URL : &str = "";
+
 /// Opens a file, writes the content.
 /// Creates the file if the file does not exist.
 pub fn write_to_file(path: &str, content: &str) -> Result<()> {

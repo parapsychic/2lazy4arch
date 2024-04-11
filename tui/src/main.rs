@@ -6,7 +6,7 @@ use shell_iface::logger::Logger;
 
 // This file will be rewritten to be a TUI.
 // Currently, I'm testing using the main.
-fn install() {
+pub fn install() {
     let logger = Logger::new(true);
     let mut filesystem = Filesystem::new(&logger);
     match demo(&mut filesystem, &logger) {
