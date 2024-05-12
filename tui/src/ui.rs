@@ -389,7 +389,7 @@ fn confirm_partitions_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
         .block(Block::default());
 
     let boot_partition = Paragraph::new(Line::from(format!(
-        "/boot: {} | format: {}",
+        "/boot: {} | erase: {}",
         app.filesystem.get_boot().unwrap(),
         app.filesystem.format_boot
     )))
@@ -403,7 +403,7 @@ fn confirm_partitions_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
     );
 
     let root_partition = Paragraph::new(Line::from(format!(
-        "/root: {} | format: YES",
+        "/root: {} | erase: true",
         app.filesystem.get_root().unwrap()
     )))
     .style(Style::default().fg(Color::Green))
@@ -416,7 +416,7 @@ fn confirm_partitions_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
     );
 
     let home_partition_msg = match app.filesystem.get_home() {
-        Some(x) => format!("/home: {} | format: {}", x, app.filesystem.format_home),
+        Some(x) => format!("/home: {} | erase: {}", x, app.filesystem.format_home),
         None => String::from("No separate home partition selected"),
     };
 
