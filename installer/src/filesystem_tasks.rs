@@ -1,13 +1,29 @@
 use std::{fs, os::unix::fs::FileTypeExt, path::Path};
 
 use anyhow::{anyhow, Result};
+use serde::Deserialize;
 use shell_iface::{logger::Logger, Shell};
 
 use crate::partition_table::PartitionTable;
 
+#[derive(Debug, Deserialize)]
+pub struct BlockDevicePartition {
+    pub name: String,
+    pub mountpoints: Option<Vec<Option<String>>>,
+    pub size: Option<String>,
+    pub children: Option<Vec<BlockDevicePartition>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlockDevices {
+    blockdevices: Vec<BlockDevicePartition>,
+}
+
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
     partitions: PartitionTable,
+    pub format_boot: bool,
+    pub format_home: bool,
 }
 
 impl<'a> Filesystem<'a> {
@@ -16,6 +32,8 @@ impl<'a> Filesystem<'a> {
         Filesystem {
             shell,
             partitions: PartitionTable::new(),
+            format_boot: false,
+            format_home: false,
         }
     }
 
@@ -26,14 +44,20 @@ impl<'a> Filesystem<'a> {
         }
     }
 
-    pub fn lsblk(&mut self) -> Result<String> {
-        match self.shell.run("lsblk") {
-            Ok(x) => Ok(String::from_utf8(x.stdout)?),
-            Err(e) => Err(e),
-        }
+    pub fn lsblk(&mut self) -> Result<Vec<BlockDevicePartition>> {
+        let data = match self
+            .shell
+            .run_with_args("lsblk", "--json --output name,size,mountpoints")
+        {
+            Ok(x) => String::from_utf8(x.stdout)?,
+            Err(e) => return Err(e),
+        };
+
+        let blockdevices: BlockDevices = serde_json::from_str(&data)?;
+        Ok(blockdevices.blockdevices)
     }
 
-    pub fn format_partitions(&mut self, format_boot: bool) -> Result<()> {
+    pub fn format_partitions(&mut self) -> Result<()> {
         if self.partitions.get_value("boot").is_none()
             || self.partitions.get_value("root").is_none()
         {
@@ -50,13 +74,17 @@ impl<'a> Filesystem<'a> {
             self.shell
                 .log("Home is not set. No separate partition will be created");
         } else {
-            let _ = self.shell.run_and_wait_with_args(
-                "mkfs.ext4",
-                &format!("-F {}", self.partitions.get_value("home").clone().unwrap()),
-            )?;
+            if self.format_home {
+                let _ = self.shell.run_and_wait_with_args(
+                    "mkfs.ext4",
+                    &format!("-F {}", self.partitions.get_value("home").clone().unwrap()),
+                )?;
+            } else {
+                self.shell.log("Format home is false, skipping...");
+            }
         }
 
-        if format_boot {
+        if self.format_boot {
             let _ = self.shell.run_and_wait_with_args(
                 "mkfs.fat",
                 &format!(
@@ -147,6 +175,17 @@ impl<'a> Filesystem<'a> {
 
     /* SETTERS */
     pub fn set_boot(&mut self, partition: &str) -> Result<()> {
+        if let Some(_) = self.get_boot() {
+            // try to delete only if there is some value
+            match self.partitions.remove_key("boot") {
+                Ok(_) => {}
+                Err(x) => {
+                    self.shell.log(&x.to_string());
+                    return Err(x);
+                }
+            }
+        }
+
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
@@ -209,6 +248,16 @@ impl<'a> Filesystem<'a> {
     }
 
     pub fn set_root(&mut self, partition: &str) -> Result<()> {
+        if let Some(_) = self.get_root() {
+            // try to delete only if there is some value
+            match self.partitions.remove_key("root") {
+                Ok(_) => {}
+                Err(x) => {
+                    self.shell.log(&x.to_string());
+                    return Err(x);
+                }
+            }
+        }
         let partition = partition.trim();
         let metadata = fs::metadata(&partition)?;
         if !metadata.file_type().is_block_device() || !ends_with_number(partition) {

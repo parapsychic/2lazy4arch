@@ -111,7 +111,7 @@ impl<'a> PostInstall<'a> {
             }
             DesktopEnvironment::DWM => {
                 self.shell.log("Installing dwm");
-                self.install_dwm();
+                self.install_dwm()?;
             }
             DesktopEnvironment::Hyprland => {
                 self.shell.log("Installing hyprland");

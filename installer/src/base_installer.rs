@@ -21,7 +21,7 @@ impl<'a> BaseInstaller<'a> {
         self.shell.log(&"Installing base packages.");
 
         let package_cmd = if let Some(p) = get_processor_make() {
-            format!("-K /mnt base linux linux-firmware {}-code", p)
+            format!("-K /mnt base linux linux-firmware {}-ucode", p)
         } else {
             String::from("-K /mnt base linux linux-firmware")
         };
