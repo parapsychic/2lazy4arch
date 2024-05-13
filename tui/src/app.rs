@@ -21,6 +21,8 @@ pub enum Screens {
 
 pub enum SubScreens {
     None,
+    
+    /* Filesystem */
     Partitioning,
     MountBoot,
     MountHome,
@@ -28,6 +30,16 @@ pub enum SubScreens {
     EraseEFI,
     EraseHome,
     ConfirmPartitions,
+
+    /* Essentials */
+    SetupSwap,
+    SelectTimezone,
+    SelectLocale,
+    SetupHostname,
+    SetupRootPassword,
+    SetupExtraPrograms,
+    SetupBootloader,
+    SetupUser,
 }
 
 /// Stores the app state
