@@ -45,8 +45,8 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
                 }
 
                 app.current_screen = Screens::Filesystem;
+                app.current_sub_screen = SubScreens::Partitioning;
                 app.list_selection.select(Some(0));
-                app.current_sub_screen = SubScreens::None;
             }
             1 => {
                 app.current_screen = Screens::Pacman;
@@ -54,6 +54,7 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
             }
             2 => {
                 app.current_screen = Screens::Essentials;
+                app.current_sub_screen = SubScreens::SetupSwap;
                 app.list_selection.select(Some(0));
             }
             3 => {

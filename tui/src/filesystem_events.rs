@@ -19,7 +19,7 @@ pub fn filesystem_screen_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn partitioning_events(app: &mut App, key: KeyEvent) {
+fn partitioning_events(app: &mut App, key: KeyEvent) {
     let total_list_item = app.filesystem_drives_list.len();
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -101,7 +101,7 @@ pub fn partitioning_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn mount_boot_events(app: &mut App, key: KeyEvent) {
+fn mount_boot_events(app: &mut App, key: KeyEvent) {
     let total_list_item = app.filesystem_partitions_list.len();
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -156,7 +156,7 @@ pub fn mount_boot_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn mount_root_events(app: &mut App, key: KeyEvent) {
+fn mount_root_events(app: &mut App, key: KeyEvent) {
     let total_list_item = app.filesystem_partitions_list.len();
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -213,7 +213,7 @@ pub fn mount_root_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn mount_home_events(app: &mut App, key: KeyEvent) {
+fn mount_home_events(app: &mut App, key: KeyEvent) {
     // adding + 1 for "No separate home partition"
     let total_list_item = app.filesystem_partitions_list.len() + 1;
     match key.code {
@@ -273,7 +273,7 @@ pub fn mount_home_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn erase_efi_events(app: &mut App, key: KeyEvent) {
+fn erase_efi_events(app: &mut App, key: KeyEvent) {
     let next_screen = match app.filesystem.get_home() {
         Some(_) => SubScreens::EraseHome,
         None => SubScreens::ConfirmPartitions,
@@ -299,7 +299,7 @@ pub fn erase_efi_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn erase_home_events(app: &mut App, key: KeyEvent) {
+fn erase_home_events(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('y') => {
             app.filesystem.format_home = true;
@@ -320,7 +320,7 @@ pub fn erase_home_events(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn confirm_partitions_events(app: &mut App, key: KeyEvent) {
+fn confirm_partitions_events(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('y') => {
             app.current_screen = Screens::StartScreen;

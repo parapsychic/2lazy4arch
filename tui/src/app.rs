@@ -58,6 +58,7 @@ pub struct App<'a> {
     pub filesystem_partitions_list: Rc<Vec<String>>,
     pub reflector_countries: Rc<Vec<&'a str>>,
     pub timezones: Rc<Vec<&'a str>>,
+    pub swap_sizes: Rc<Vec<usize>>,
 
     /* Selection and Method parameters */
     pub selected_reflector_country: String,
@@ -103,6 +104,7 @@ impl<'a> App<'a> {
             password: String::new(),
             hostname: String::new(),
             
+            swap_sizes: Rc::new(vec![1, 2, 4, 8, 16, 32, 64]),
             reflector_countries: Rc::new(vec![
                 "Australia",
                 "Austria",

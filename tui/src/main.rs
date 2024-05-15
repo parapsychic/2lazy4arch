@@ -7,6 +7,7 @@ mod filesystem_ui;
 mod pacman_ui;
 mod essentials_ui;
 mod ui_utils;
+mod essentials_events;
 
 use crate::app::App;
 use crate::ui::ui;
@@ -16,6 +17,7 @@ use crossterm::event::{DisableMouseCapture, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
+use essentials_events::essentials_events;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 use shell_iface::logger::Logger;
@@ -77,6 +79,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                 }
                 Screens::Pacman if key.kind == KeyEventKind::Press => {
                     pacman_screen_events(app, key)
+                }
+                Screens::Essentials if key.kind == KeyEventKind::Press => {
+                    essentials_events(app, key)
                 }
                 Screens::Exiting => match key.code {
                     KeyCode::Char('y') => {
