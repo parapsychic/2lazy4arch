@@ -66,9 +66,6 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         },
-        KeyCode::Backspace => {
-            app.text_controller.pop();
-        }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.current_screen = Screens::Exiting;
         }
