@@ -21,8 +21,23 @@ pub fn essentials_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
         SubScreens::SetupExtraPrograms => setup_extra_programs_ui(f, chunk, app),
         SubScreens::SetupBootloader => setup_bootloader_ui(f, chunk, app),
         SubScreens::SetupUser => setup_user_ui(f, chunk, app),
+        SubScreens::SetupSuperUserUtility => setup_superuser_ui(f, chunk, app),
         _ => show_none_screen(f, chunk, "Additional Configuration"),
     }
+}
+
+fn setup_superuser_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
+    let list = List::new(vec!["sudo", "doas"])
+        .block(
+            Block::default()
+                .title("Select the super user utility")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true);
+
+    f.render_stateful_widget(list, chunk, &mut app.list_selection);
 }
 
 fn setup_locale_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {

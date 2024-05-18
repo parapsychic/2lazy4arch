@@ -23,8 +23,8 @@ pub struct Essentials<'a> {
     is_chroot: bool,
     shell: Shell<'a>,
     pacman: Pacman<'a>,
-    bootloader: Bootloader,
-    super_user_utility: SuperUserUtility,
+    pub bootloader: Bootloader,
+    pub super_user_utility: SuperUserUtility,
 }
 
 impl<'a> Essentials<'a> {
@@ -190,7 +190,7 @@ impl<'a> Essentials<'a> {
         Ok(())
     }
 
-    /// set up root password
+    /// set up password
     pub fn set_password(&mut self, user: &str, password: &str) -> Result<()> {
         self.shell.log(&format!("Setting password for {}", user));
 

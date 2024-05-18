@@ -6,7 +6,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::{app::{App, Screens}, filesystem_ui::filesystem_screen_ui, pacman_ui::pacman_setup_ui, essentials_ui::essentials_ui};
+use crate::{
+    app::{App, Screens},
+    essentials_ui::essentials_ui,
+    filesystem_ui::filesystem_screen_ui,
+    pacman_ui::pacman_setup_ui, install_ui::install_screen_ui,
+};
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
@@ -36,7 +41,6 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             Screens::Exiting => Span::styled("Exiting", Style::default().fg(Color::LightRed)),
             Screens::Pacman => Span::styled("Pacman", Style::default().fg(Color::Yellow)),
             Screens::Essentials => Span::styled("Essentials", Style::default().fg(Color::Yellow)),
-            Screens::PostInstall => Span::styled("PostInstall", Style::default().fg(Color::Yellow)),
             Screens::Installing => Span::styled("Installing", Style::default().fg(Color::Green)),
         }
         .to_owned(),
@@ -59,7 +63,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 "(y) to quit / (any key) to cancel",
                 Style::default().fg(Color::Red),
             ),
-            _ => Span::styled("Select some screen", Style::default().fg(Color::Red)),
+            Screens::Installing => Span::styled(
+                "(y) to confirm / (any key) to cancel",
+                Style::default().fg(Color::Red),
+            ),
+
+            _ => Span::styled(
+                "(esc) to quit / (enter) to select / (up/down) to change selection",
+                Style::default().fg(Color::Red),
+            ),
         }
     };
 
@@ -100,9 +112,8 @@ fn screen_switcher(f: &mut Frame, chunk: Rect, app: &mut App) {
         Screens::Filesystem => filesystem_screen_ui(f, chunk, app),
         Screens::Pacman => pacman_setup_ui(f, chunk, app),
         Screens::Essentials => essentials_ui(f, chunk, app),
-        Screens::PostInstall => todo!(),
         Screens::Exiting => start_screen_ui(f, chunk, app),
-        Screens::Installing => todo!(),
+        Screens::Installing => install_screen_ui(f, chunk, app),
     }
 }
 
@@ -140,4 +151,3 @@ fn start_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
 
     f.render_stateful_widget(list, chunk, &mut app.list_selection);
 }
-

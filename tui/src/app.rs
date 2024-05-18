@@ -14,7 +14,6 @@ pub enum Screens {
     Filesystem,
     Pacman,
     Essentials,
-    PostInstall,
     Installing,
     Exiting,
 }
@@ -39,6 +38,7 @@ pub enum SubScreens {
     SetupRootPassword,
     SetupExtraPrograms,
     SetupBootloader,
+    SetupSuperUserUtility,
     SetupUser,
 }
 
@@ -70,7 +70,6 @@ pub struct App<'a> {
     pub password: String,
     pub root_password: String,
     pub hostname: String,
-    pub selected_bootloader: Bootloader,
 
     /* Configuration state */
     pub filesystem: Filesystem<'a>,
@@ -110,11 +109,11 @@ impl<'a> App<'a> {
             username: String::new(),
             password: String::new(),
             root_password: String::new(),
-            selected_bootloader: Bootloader::Grub,
             hostname: String::new(),
 
             swap_sizes_list: Rc::new(vec![1, 2, 4, 8, 16, 32, 64]),
             reflector_countries: Rc::new(vec![
+                "India",
                 "Australia",
                 "Austria",
                 "Azerbaijan",
@@ -187,6 +186,7 @@ impl<'a> App<'a> {
                 "Vietnam",
             ]),
             timezones: Rc::new(vec![
+                "Asia/Kolkata",
                 "Africa/Abidjan",
                 "Africa/Accra",
                 "Africa/Addis_Ababa",

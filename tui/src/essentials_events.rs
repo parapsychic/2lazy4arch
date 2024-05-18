@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use installer::essentials::Bootloader;
+use installer::essentials::{Bootloader, SuperUserUtility};
 
 use crate::app::{App, Screens, SubScreens};
 
@@ -13,12 +13,14 @@ pub fn essentials_events(app: &mut App, key: KeyEvent) {
         SubScreens::SetupExtraPrograms => setup_extra_packages_events(app, key),
         SubScreens::SetupBootloader => setup_boot_loader_events(app, key),
         SubScreens::SetupUser => setup_user_events(app, key),
+        SubScreens::SetupSuperUserUtility => setup_super_user_events(app, key),
         SubScreens::None => match key.code {
             _ => app.current_sub_screen = SubScreens::SetupSwap,
         },
         _ => {}
     }
 }
+
 
 fn setup_user_events(app: &mut App<'_>, key: KeyEvent) {
     let total_list_item = 2;
@@ -77,6 +79,53 @@ fn setup_user_events(app: &mut App<'_>, key: KeyEvent) {
             }
         }
         KeyCode::Esc => {
+            app.current_sub_screen = SubScreens::SetupSuperUserUtility;
+            app.list_selection.select(Some(0));
+        }
+        _ => {}
+    }
+}
+
+fn setup_super_user_events(app: &mut App<'_>, key: KeyEvent) {
+    let total_list_item = 2;
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            match app.list_selection.selected() {
+                Some(x) => {
+                    let index: usize;
+                    if x == 0 {
+                        index = total_list_item - 1;
+                    } else {
+                        index = x - 1;
+                    }
+                    app.list_selection.select(Some(index));
+                }
+                None => {
+                    app.list_selection.select(Some(0));
+                }
+            };
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            match app.list_selection.selected() {
+                Some(x) => {
+                    app.list_selection.select(Some((x + 1) % total_list_item));
+                }
+                None => {
+                    app.list_selection.select(Some(0));
+                }
+            };
+        }
+        KeyCode::Enter => {
+            let selection = app.list_selection.selected().unwrap();
+            if selection == 0 {
+                app.essentials.super_user_utility = SuperUserUtility::Sudo;
+            } else {
+                app.essentials.super_user_utility = SuperUserUtility::Doas;
+            }
+            app.current_sub_screen = SubScreens::SetupUser;
+            app.list_selection.select(Some(0));
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
             app.current_sub_screen = SubScreens::SetupBootloader;
             app.list_selection.select(Some(0));
         }
@@ -116,11 +165,11 @@ fn setup_boot_loader_events(app: &mut App<'_>, key: KeyEvent) {
         KeyCode::Enter => {
             let selection = app.list_selection.selected().unwrap();
             if selection == 0 {
-                app.selected_bootloader = Bootloader::Grub;
+                app.essentials.bootloader = Bootloader::Grub;
             } else {
-                app.selected_bootloader = Bootloader::SystemDBoot;
+                app.essentials.bootloader = Bootloader::SystemDBoot;
             }
-            app.current_sub_screen = SubScreens::SetupUser;
+            app.current_sub_screen = SubScreens::SetupSuperUserUtility;
             app.list_selection.select(Some(0));
         }
         KeyCode::Esc | KeyCode::Char('q') => {

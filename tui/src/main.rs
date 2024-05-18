@@ -8,6 +8,7 @@ mod pacman_ui;
 mod essentials_ui;
 mod ui_utils;
 mod essentials_events;
+mod install_ui;
 
 use crate::app::App;
 use crate::ui::ui;

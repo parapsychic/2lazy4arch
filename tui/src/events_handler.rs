@@ -58,8 +58,13 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
                 app.list_selection.select(Some(0));
             }
             3 => {
-                app.current_screen = Screens::Installing;
-                app.list_selection.select(Some(0));
+                if app.pacman_setup_complete && app.filesystem_setup_complete && app.essentials_setup_complete{
+                    app.current_screen = Screens::Installing;
+                    app.list_selection.select(Some(0));
+                } 
+                else{
+                    app.error_console = "Some components are not set up. Please setup all components before installing...".to_string();
+                }
             }
             4 => {
                 app.current_screen = Screens::Exiting;
