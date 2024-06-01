@@ -1,16 +1,17 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, Paragraph},
+    widgets::{Block, Borders, List, Paragraph, Wrap},
     Frame,
 };
 
 use crate::{
-    app::{App, Screens},
+    app::{App, Screens, SubScreens},
     essentials_ui::essentials_ui,
     filesystem_ui::filesystem_screen_ui,
-    pacman_ui::pacman_setup_ui, install_ui::install_screen_ui,
+    install_ui::install_screen_ui,
+    pacman_ui::pacman_setup_ui, ui_utils::centered_rect,
 };
 
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -67,7 +68,17 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 "(y) to confirm / (any key) to cancel",
                 Style::default().fg(Color::Red),
             ),
+            Screens::Filesystem => match app.current_sub_screen {
+                SubScreens::MountExtraPartition => Span::styled(
+                    "(esc) to go back / (enter) to select / (delete) or (x) to delete / (up/down) to change selection",
+                    Style::default().fg(Color::Red),
+                ),
 
+                _ => Span::styled(
+                    "(esc) to go back / (enter) to select / (up/down) to change selection",
+                    Style::default().fg(Color::Red),
+                ),
+            },
             _ => Span::styled(
                 "(esc) to quit / (enter) to select / (up/down) to change selection",
                 Style::default().fg(Color::Red),
@@ -112,7 +123,7 @@ fn screen_switcher(f: &mut Frame, chunk: Rect, app: &mut App) {
         Screens::Filesystem => filesystem_screen_ui(f, chunk, app),
         Screens::Pacman => pacman_setup_ui(f, chunk, app),
         Screens::Essentials => essentials_ui(f, chunk, app),
-        Screens::Exiting => start_screen_ui(f, chunk, app),
+        Screens::Exiting => exit_screen_ui(f, chunk, app),
         Screens::Installing => install_screen_ui(f, chunk, app),
     }
 }
@@ -150,4 +161,58 @@ fn start_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
         .repeat_highlight_symbol(true);
 
     f.render_stateful_widget(list, chunk, &mut app.list_selection);
+}
+
+fn exit_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
+    let msg = Paragraph::new(Line::from(
+        "Do you want to exit the installer?",
+    ))
+    .style(Style::default().fg(Color::Yellow))
+    .alignment(Alignment::Center)
+    .block(Block::default());
+
+    let yes_msg = Paragraph::new(Line::from("[Y] Yes"))
+        .style(Style::default().fg(Color::Green))
+        .alignment(Alignment::Center)
+        .wrap(Wrap::default())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Red)),
+        );
+
+    let no_msg = Paragraph::new(Line::from("[N] No"))
+        .style(Style::default().fg(Color::Green))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Red)),
+        );
+
+    let prompt_box = centered_rect(70, 30, chunk);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
+        .split(prompt_box);
+
+    let action_btn_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(centered_rect(75, 75, layout[1]));
+
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Yellow)),
+        prompt_box,
+    );
+    f.render_widget(msg, layout[0]);
+    f.render_widget(yes_msg, centered_rect(75, 75, action_btn_layout[0]));
+    f.render_widget(no_msg, centered_rect(75, 75, action_btn_layout[1]));
 }

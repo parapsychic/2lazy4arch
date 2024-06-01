@@ -98,8 +98,8 @@ impl<'a> Filesystem<'a> {
     }
 
     /// Remove a mount point 
-    pub fn remove_mount_point(&mut self, partition: &str) -> Result<String> {
-        self.partitions.remove_key(partition)
+    pub fn remove_mount_point(&mut self, mount_point: &str) -> Result<String> {
+        self.partitions.remove_key(mount_point)
     }
 
     /// Set other partitions

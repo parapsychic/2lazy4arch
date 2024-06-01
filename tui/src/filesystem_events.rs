@@ -370,6 +370,26 @@ fn mount_extra_partitions(app: &mut App, key: KeyEvent) {
                 }
             };
         }
+        KeyCode::Delete | KeyCode::Char('x') => {
+            let selected_index = app.list_selection.selected().unwrap();
+
+            if selected_index < app.filesystem.partitions.iter().len() {
+                let mount_point = match app.filesystem.partitions.iter().nth(selected_index) {
+                    Some(x) => x.0.clone(),
+                    None => return,
+                };
+
+                if mount_point == "boot" || mount_point == "root" || mount_point == "home" {
+                    app.error_console = "Cannot remove system partitions here.".to_string();
+                    return;
+                }
+
+                match app.filesystem.remove_mount_point(&mount_point) {
+                    Ok(_) => {}
+                    Err(e) => app.error_console = e.to_string(),
+                }
+            }
+        }
         KeyCode::Enter => {
             let selected_index = app.list_selection.selected().unwrap();
 
@@ -438,15 +458,15 @@ fn insert_extra_partitions(app: &mut App, key: KeyEvent) {
             if app.tab_selection == 0 {
                 app.tab_selection = 1;
             } else {
-                if !is_valid_mount_point(&app.text_controller)
-                {
+                if !is_valid_mount_point(&app.text_controller) {
                     app.error_console = "Mount point name contains invalid characters".to_string();
+                    return;
                 }
 
                 // if user tries to type eg, /WindowsShared
                 // then we have to internally mount it at /mnt/WindowsShared
                 // so, it makes sense to remove the /
-                if app.text_controller.starts_with("/"){
+                if app.text_controller.starts_with("/") {
                     app.text_controller.remove(0);
                 }
 
@@ -454,7 +474,7 @@ fn insert_extra_partitions(app: &mut App, key: KeyEvent) {
                 let selected = &app.filesystem_partitions_list.clone()[selected_index];
                 let selected = selected.split(' ').collect::<Vec<&str>>();
                 match app.filesystem.set_mount_points(
-                    &format!("/dev/{}",selected.first().unwrap()),
+                    &format!("/dev/{}", selected.first().unwrap()),
                     &app.text_controller.clone(),
                 ) {
                     Ok(_) => {}
