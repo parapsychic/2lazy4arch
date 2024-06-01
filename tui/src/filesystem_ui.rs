@@ -16,6 +16,8 @@ pub fn filesystem_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
         SubScreens::MountHome => mount_home_subscreen_ui(f, chunk, app),
         SubScreens::EraseEFI => erase_efi_ui(f, chunk, app),
         SubScreens::EraseHome => erase_home_ui(f, chunk, app),
+        SubScreens::MountExtraPartition => mount_extra_partitions(f, chunk, app),
+        SubScreens::MountExtraPartition__Insert => mount_extra_partitions_insert(f, chunk, app),
         SubScreens::ConfirmPartitions => confirm_partitions_ui(f, chunk, app),
         _ => show_none_screen(f, chunk, "Filesystem"),
     }
@@ -237,8 +239,71 @@ pub fn erase_home_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
     f.render_widget(no_msg, centered_rect(75, 75, action_btn_layout[1]));
 }
 
+pub fn mount_extra_partitions(f: &mut Frame, chunk: Rect, app: &mut App) {
+    let mut list_with_extra_options = app.filesystem.partitions.iter().map(|x| {
+       format!("{} : {}", x.0, x.1) 
+    }).collect::<Vec<String>>();
+    list_with_extra_options.push("Add new partition".to_string());
+    list_with_extra_options.push("Continue".to_string());
+
+    let list = List::new(list_with_extra_options)
+        .block(
+            Block::default()
+                .title("Mount extra partitions")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(chunk);
+
+    let msg = Paragraph::new(Line::from("These partitions will be mount as is."))
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Red)),
+        );
+    f.render_stateful_widget(list, layout[0], &mut app.list_selection);
+    f.render_widget(msg, layout[1]);
+}
+
+pub fn mount_extra_partitions_insert(f: &mut Frame, chunk: Rect, app: &mut App) {
+    let mount_point = Paragraph::new(Line::from(app.text_controller.clone()))
+        .alignment(Alignment::Left)
+        .block(
+            Block::default()
+                .title("Mount point")
+                .borders(Borders::ALL)
+                .style(Style::default().fg( if app.tab_selection == 0 { Color::Yellow } else { Color::White } )),
+        );
+
+    let list = List::new(app.filesystem_partitions_list.to_vec())
+        .block(
+            Block::default()
+                .title("Partition")
+                .borders(Borders::ALL)
+                .style(Style::default().fg( if app.tab_selection == 1 { Color::Yellow } else { Color::White } ))
+        )
+        .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true);
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Min(1)])
+        .split(centered_rect(70, 30, chunk));
+
+    f.render_stateful_widget(list, layout[1], &mut app.list_selection);
+    f.render_widget(mount_point, layout[0]);
+}
+
 pub fn confirm_partitions_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
-    let msg = Paragraph::new(Line::from("Are you happy with this layout?"))
+    let msg = Paragraph::new(Line::from("Continue with this layout for system disks (extra partitions not shown)?"))
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center)
         .block(Block::default());

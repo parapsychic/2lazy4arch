@@ -28,6 +28,8 @@ pub enum SubScreens {
     MountRoot,
     EraseEFI,
     EraseHome,
+    MountExtraPartition,
+    MountExtraPartition__Insert,
     ConfirmPartitions,
 
     /* Essentials */
@@ -49,6 +51,7 @@ pub struct App<'a> {
     pub current_sub_screen: SubScreens,
     pub list_selection: ListState,
     pub error_console: String,
+    pub tab_selection: usize,
 
     pub redraw_next_frame: bool,
 
@@ -59,6 +62,7 @@ pub struct App<'a> {
     pub timezones: Rc<Vec<&'a str>>,
     pub swap_sizes_list: Rc<Vec<usize>>,
     pub locales_list: Rc<Vec<&'a str>>,
+    pub text_controller: String,
 
     /* Selection and Method parameters */
     pub selected_reflector_country: String,
@@ -89,6 +93,8 @@ impl<'a> App<'a> {
             current_screen: Screens::StartScreen,
             current_sub_screen: SubScreens::None,
             list_selection: ListState::default().with_selected(Some(0)),
+            tab_selection: 0,
+            text_controller: String::new(),
             error_console: String::new(),
             redraw_next_frame: false,
             filesystem: Filesystem::new(&logger),

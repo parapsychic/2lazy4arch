@@ -119,3 +119,26 @@ pub fn get_uuid_root() -> Result<String> {
     
     Err(anyhow!("Could not find UUID"))
 }
+
+/// Check if a string is a valid mountpoint name
+pub fn is_valid_mount_point(name: &str) -> bool {
+    // Allowed characters in mount point names
+    let allowed_chars = |c: char| {
+        c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
+    };
+
+    // Check if the string is empty or starts with a hyphen
+    if name.is_empty() || name.starts_with('-') {
+        return false;
+    }
+
+    // Check each character in the string
+    for c in name.chars() {
+        if !allowed_chars(c) {
+            return false;
+        }
+    }
+
+    true
+}
+

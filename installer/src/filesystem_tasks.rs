@@ -21,7 +21,7 @@ struct BlockDevices {
 
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
-    partitions: PartitionTable,
+    pub partitions: PartitionTable,
     pub format_boot: bool,
     pub format_home: bool,
 }
@@ -95,6 +95,47 @@ impl<'a> Filesystem<'a> {
         }
 
         return Ok(());
+    }
+
+    /// Remove a mount point 
+    pub fn remove_mount_point(&mut self, partition: &str) -> Result<String> {
+        self.partitions.remove_key(partition)
+    }
+
+    /// Set other partitions
+    pub fn set_mount_points(&mut self, partition: &str, mount_point: &str) -> Result<()> {
+        if let Some(_) = self.partitions.get_key(mount_point) {
+            // try to delete only if there is some value
+            match self.partitions.remove(Some(&mount_point), Some(&partition)) {
+                Ok(_) => {}
+                Err(x) => {
+                    self.shell.log(&x.to_string());
+                    return Err(x);
+                }
+            }
+        }
+
+        let partition = partition.trim();
+        let metadata = fs::metadata(&partition)?;
+        if !metadata.file_type().is_block_device() || !ends_with_number(partition) {
+            self.shell.log(&format!(
+                "{}: NOT A BLOCK DEVICE or DOES NOT END WITH A NUMBER. Cannot mount to boot",
+                partition
+            ));
+            return Err(anyhow!("{} does not look like a partition.", partition));
+        }
+
+        match self
+            .partitions
+            .insert(String::from(mount_point), String::from(partition))
+        {
+            Ok(_) => {}
+            Err(x) => {
+                self.shell.log(&x.to_string());
+                return Err(x);
+            }
+        }
+        Ok(())
     }
 
     /// Mounts all partitions
