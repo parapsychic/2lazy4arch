@@ -146,7 +146,20 @@ You can change the argument name, but I made this specifically for running my sc
 
 ![2024-06-24_00-52_1](https://github.com/parapsychic/2lazy4arch/assets/63157522/4abdc61d-c80e-4d6c-a233-1ad944b5f1ec)
 
+## Problems?
+It Just Works<sup>TM</sup>  
+
+<img src="https://yt3.ggpht.com/a/AATXAJxuZBNfke48M_7TcSsN9iMtJmaE1JTNVVfEeg=s900-c-k-c0xffffffff-no-rj-mo" target="_blank" rel="noopener"  height=100px >
+
+But in case it doesn't, [click here](https://newfastuff.com/wp-content/uploads/2019/05/5p3oYv1.png) or open an issue and cross your fingers.
+
+Built with ❤️ and Rust
+
+<sup>Hire me Bethesda, I'll work for minimum wage.</sup>
+
+<a href="https://youtu.be/Eweu-mHzmq4?si=pAnmXEZV0725b7rS" target="_blank" rel="noopener"><img src=".readme_images/hong.png" height=100px></a>
+
 ![2024-06-24_00-56](https://github.com/parapsychic/2lazy4arch/assets/63157522/16601791-0617-4647-bde0-2a4d73f556c6)
 
 
-
+🫰 I'll probably switch to Nix OS after this...
