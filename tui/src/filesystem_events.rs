@@ -59,6 +59,7 @@ fn partitioning_events(app: &mut App, key: KeyEvent) {
                     .lsblk()
                     .unwrap()
                     .iter()
+                    .filter(|x| x.children.is_some())
                     .map(|x| {
                         x.children
                             .as_ref()

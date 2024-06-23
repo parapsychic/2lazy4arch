@@ -21,9 +21,9 @@ impl<'a> BaseInstaller<'a> {
         self.shell.log(&"Installing base packages.");
 
         let package_cmd = if let Some(p) = get_processor_make() {
-            format!("-K /mnt base linux linux-firmware {}-ucode", p)
+            format!("-K /mnt base linux linux-firmware {}-ucode neovim reflector", p)
         } else {
-            String::from("-K /mnt base linux linux-firmware")
+            String::from("-K /mnt base linux linux-firmware neovim reflector")
         };
 
         match self.shell.run_and_wait_with_args("pacstrap", &package_cmd) {

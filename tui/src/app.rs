@@ -38,10 +38,13 @@ pub enum SubScreens {
     SelectLocale,
     SetupHostname,
     SetupRootPassword,
-    SetupExtraPrograms,
     SetupBootloader,
     SetupSuperUserUtility,
     SetupUser,
+
+    /* Installing */ 
+    ConfirmInstallation,
+    StartInstallation,
 }
 
 /// Stores the app state
@@ -77,7 +80,7 @@ pub struct App<'a> {
 
     /* Configuration state */
     pub filesystem: Filesystem<'a>,
-    pub base_intaller: BaseInstaller<'a>,
+    pub base_installer: BaseInstaller<'a>,
     pub essentials: Essentials<'a>,
     pub pacman: Pacman<'a>,
 
@@ -85,6 +88,7 @@ pub struct App<'a> {
     pub filesystem_setup_complete: bool,
     pub pacman_setup_complete: bool,
     pub essentials_setup_complete: bool,
+    pub start_installation: bool,
 }
 
 impl<'a> App<'a> {
@@ -98,7 +102,7 @@ impl<'a> App<'a> {
             error_console: String::new(),
             redraw_next_frame: false,
             filesystem: Filesystem::new(&logger),
-            base_intaller: BaseInstaller::new(&logger),
+            base_installer: BaseInstaller::new(&logger),
             pacman: Pacman::new(&logger),
             essentials: Essentials::new(&logger, Bootloader::Grub, SuperUserUtility::Sudo),
             filesystem_drives_list: Rc::new(Vec::new()),
@@ -116,6 +120,7 @@ impl<'a> App<'a> {
             password: String::new(),
             root_password: String::new(),
             hostname: String::new(),
+            start_installation: false,
 
             swap_sizes_list: Rc::new(vec![1, 2, 4, 8, 16, 32, 64]),
             reflector_countries: Rc::new(vec![

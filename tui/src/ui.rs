@@ -163,7 +163,7 @@ fn start_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
     f.render_stateful_widget(list, chunk, &mut app.list_selection);
 }
 
-fn exit_screen_ui(f: &mut Frame, chunk: Rect, app: &mut App) {
+fn exit_screen_ui(f: &mut Frame, chunk: Rect, _: &mut App) {
     let msg = Paragraph::new(Line::from(
         "Do you want to exit the installer?",
     ))

@@ -10,7 +10,6 @@ pub fn essentials_events(app: &mut App, key: KeyEvent) {
         SubScreens::SelectLocale => setup_locale_events(app, key),
         SubScreens::SetupHostname => setup_hostname_events(app, key),
         SubScreens::SetupRootPassword => setup_root_password_events(app, key),
-        SubScreens::SetupExtraPrograms => setup_extra_packages_events(app, key),
         SubScreens::SetupBootloader => setup_boot_loader_events(app, key),
         SubScreens::SetupUser => setup_user_events(app, key),
         SubScreens::SetupSuperUserUtility => setup_super_user_events(app, key),
@@ -173,19 +172,6 @@ fn setup_boot_loader_events(app: &mut App<'_>, key: KeyEvent) {
             app.list_selection.select(Some(0));
         }
         KeyCode::Esc | KeyCode::Char('q') => {
-            app.current_sub_screen = SubScreens::SetupExtraPrograms;
-            app.list_selection.select(Some(0));
-        }
-        _ => {}
-    }
-}
-
-fn setup_extra_packages_events(app: &mut App<'_>, key: KeyEvent) {
-    match key.code {
-        KeyCode::Enter => {
-            app.current_sub_screen = SubScreens::SetupBootloader;
-        }
-        KeyCode::Esc | KeyCode::Char('q') => {
             app.current_sub_screen = SubScreens::SetupRootPassword;
             app.list_selection.select(Some(0));
         }
@@ -202,8 +188,7 @@ fn setup_root_password_events(app: &mut App<'_>, key: KeyEvent) {
             app.root_password.pop();
         }
         KeyCode::Enter => {
-            app.root_password.clear();
-            app.current_sub_screen = SubScreens::SetupExtraPrograms;
+            app.current_sub_screen = SubScreens::SetupBootloader;
             app.list_selection.select(Some(0));
         }
         KeyCode::Esc => {
@@ -223,7 +208,6 @@ fn setup_hostname_events(app: &mut App<'_>, key: KeyEvent) {
             app.hostname.pop();
         }
         KeyCode::Enter => {
-            app.hostname.clear();
             app.current_sub_screen = SubScreens::SetupRootPassword;
             app.list_selection.select(Some(0));
         }

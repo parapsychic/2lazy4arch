@@ -5,20 +5,20 @@ use std::{
 
 use anyhow::{anyhow, Result};
 
-pub const DWM_SCRIPT_URL : &str = "";
 pub const RICE_SCRIPT_URL : &str = "";
+pub const INSTALL_SUCCESS_FLAG: &str = "/var/tmp/2lazy4archinstallationflag";
 
 /// Opens a file, writes the content.
 /// Creates the file if the file does not exist.
 pub fn write_to_file(path: &str, content: &str) -> Result<()> {
-    let mut fstab = match OpenOptions::new().write(true).create(true).open(path) {
+    let mut file = match OpenOptions::new().write(true).create(true).open(path) {
         Ok(x) => x,
         Err(e) => {
             return Err(anyhow!(e));
         }
     };
 
-    if let Err(e) = fstab.write(content.as_bytes()) {
+    if let Err(e) = file.write(content.as_bytes()) {
         return Err(anyhow!(e));
     }
 
@@ -29,14 +29,14 @@ pub fn write_to_file(path: &str, content: &str) -> Result<()> {
 /// Creates the file if the file does not exist.
 /// Adds a newline before appending just to be sure.
 pub fn append_to_file(path: &str, content: &str) -> Result<()> {
-    let mut fstab = match OpenOptions::new().append(true).create(true).open(path) {
+    let mut file = match OpenOptions::new().append(true).create(true).open(path) {
         Ok(x) => x,
         Err(e) => {
             return Err(anyhow!(e));
         }
     };
 
-    if let Err(e) = fstab.write(format!("\n{}", content).as_bytes()) {
+    if let Err(e) = file.write(format!("\n{}", content).as_bytes()) {
         return Err(anyhow!(e));
     }
 

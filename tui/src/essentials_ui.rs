@@ -18,7 +18,6 @@ pub fn essentials_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
         SubScreens::SelectTimezone => setup_timezone_ui(f, chunk, app),
         SubScreens::SetupHostname => setup_hostname_ui(f, chunk, app),
         SubScreens::SetupRootPassword => setup_root_password_ui(f, chunk, app),
-        SubScreens::SetupExtraPrograms => setup_extra_programs_ui(f, chunk, app),
         SubScreens::SetupBootloader => setup_bootloader_ui(f, chunk, app),
         SubScreens::SetupUser => setup_user_ui(f, chunk, app),
         SubScreens::SetupSuperUserUtility => setup_superuser_ui(f, chunk, app),
@@ -92,22 +91,6 @@ fn setup_root_password_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
                 .style(Style::default().fg(Color::Yellow)),
         );
     f.render_widget(root_password_ui, centered_rect(70, 10, chunk));
-}
-
-fn setup_extra_programs_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
-    let programs_ui = Paragraph::new(Line::from("Still figuring this out..."))
-        .style(Style::default().fg(Color::Yellow))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .title("Setting up extra programs: ")
-                .borders(Borders::ALL)
-                .style(Style::default().fg(match app.list_selection.selected() {
-                    Some(0) => Color::Yellow,
-                    _ => Color::Red,
-                })),
-        );
-    f.render_widget(programs_ui, centered_rect(70, 10, chunk));
 }
 
 fn setup_bootloader_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {

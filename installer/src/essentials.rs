@@ -19,6 +19,8 @@ pub enum SuperUserUtility {
 
 /// Essentials basically installs arch to be a bootable/usable state.
 /// This is same as the install.sh
+/// Essentials must be the last to run before program exits. 
+/// Reason in chroot function
 pub struct Essentials<'a> {
     is_chroot: bool,
     shell: Shell<'a>,
@@ -36,7 +38,7 @@ impl<'a> Essentials<'a> {
         bootloader: Bootloader,
         super_user_utility: SuperUserUtility,
     ) -> Essentials<'b> {
-        let shell = Shell::new("Base Installer", logger);
+        let shell = Shell::new("Essentials", logger);
         let pacman = Pacman::new(logger);
 
         Essentials {
@@ -52,6 +54,13 @@ impl<'a> Essentials<'a> {
     /// It is imperative that this should be called first before executing any other fns.
     /// Instead of calling arch-chroot, chroot is being called directly.
     /// Followed instructions from [here](https://wiki.archlinux.org/title/Chroot#Using_chroot)
+    /// Since I can't un-chroot once we're inside chroot,
+    /// we need to make sure this struct's functions are run at the very end.
+    /// This behavior is consistent with how chroot works in Unix-like systems: 
+    /// once a process is chrooted, it cannot simply "unchroot" itself.
+    /// So, either refactor the whole code to include forking process,
+    /// or just rely on this process to exit and 
+    /// thus send the user back to un-chrooted environment.
     pub fn chroot(&mut self) -> Result<()> {
         self.shell.log("Entering chroot.");
         self.shell
@@ -67,14 +76,14 @@ impl<'a> Essentials<'a> {
             "-o bind /sys/firmware/efi/efivars /mnt/sys/firmware/efi/efivars/",
         )?;
         fs::copy("/etc/resolv.conf", "/mnt/etc/resolv.conf")?;
-        std::os::unix::fs::chroot("/sandbox")?;
+        std::os::unix::fs::chroot("/mnt")?;
         std::env::set_current_dir("/")?;
 
         self.shell.log("Entered chroot.");
 
-        self.shell.log("Sourcing bash profiles from chroot.");
-        self.shell.run_with_args("source", "/etc/profile")?;
-        self.shell.run_with_args("source", "~/.bashrc")?;
+        self.shell.log("Sourcing profiles from chroot.");
+        // this seems to be failing often.
+        let _ = self.shell.run_with_args("source", "/etc/profile");
         self.is_chroot = true;
 
         self.shell.log("Completed entering chroot.");
@@ -82,8 +91,7 @@ impl<'a> Essentials<'a> {
     }
 
     /// Sets the swap size.
-    /// Size is the number of 1M blocks on disk.
-    /// eg. 1GB swap = 1024, 8GB = 8096...
+    /// Size is in GB
     /// Should be run in a multithreaded manner. There is no point in waiting for this to complete.
     /// But, must panic if the operation fails as that would affect the whole system.
     pub fn initialize_swap(&mut self, size: usize) -> Result<()> {
@@ -93,13 +101,14 @@ impl<'a> Essentials<'a> {
             return Err(anyhow!("Cannot initialize swap, not in chroot."));
         }
 
-        self.shell.log(&format!("Size: {} MB", size));
+        let multiplied_size = size * 1024;
+        self.shell.log(&format!("Size: {} MB", multiplied_size));
         self.shell.log("Creating Swap Partition");
         let status = self.shell.run_and_wait_with_args(
             "dd",
             &format!(
                 "if=/dev/zero of=/swapfile bs=1M count={} status=progress",
-                size
+                multiplied_size
             ),
         )?;
 
@@ -207,7 +216,11 @@ impl<'a> Essentials<'a> {
     }
 
     /// installs the required programs
-    pub fn install_essentials(&mut self, extra_programs: Option<Vec<&str>>) -> Result<()> {
+    pub fn install_essentials(
+        &mut self,
+        reflector_country: &str,
+        extra_programs: Option<Vec<&str>>,
+    ) -> Result<()> {
         self.shell.log("Starting essentials package install");
 
         if !self.is_chroot {
@@ -234,13 +247,22 @@ impl<'a> Essentials<'a> {
             "pulseaudio-bluetooth",
             "alsa-utils",
             "cups",
-            "neovim",
         ];
 
         if let Some(extras) = extra_programs {
             essential_packages.extend(extras)
         }
 
+        essential_packages.push(match self.super_user_utility {
+            SuperUserUtility::Sudo => "sudo",
+            SuperUserUtility::Doas => "opendoas",
+        });
+
+        if let Bootloader::Grub = self.bootloader {
+            essential_packages.push("grub");
+        }
+
+        self.pacman.run_reflector(reflector_country)?;
         self.pacman.install(essential_packages)?;
         self.shell.log("Completed essentials package install");
 
@@ -397,27 +419,6 @@ options root=UUID={} rw",
             }
         }
 
-        Ok(())
-    }
-
-    /// Exits chroot
-    /// Also unmounts all the partitions that were mounted during the chroot setup.
-    /// Follows the guide [here](https://wiki.archlinux.org/title/Chroot#Using_chroot)
-    pub fn exit_chroot(&mut self) -> Result<()> {
-        self.shell.log("Started exit chroot.");
-
-        if !self.is_chroot {
-            self.shell.log("Cannot exit chroot: Not in chroot.");
-            return Err(anyhow!("Cannot exit chroot: Not in chroot."));
-        }
-
-        self.shell.run_and_wait("exit")?;
-        std::env::set_current_dir("/")?;
-        self.shell
-            .run_and_wait_with_args("umount", "--recursive /path/to/new/root")?;
-
-        self.is_chroot = false;
-        self.shell.log("Exit chroot successful.");
         Ok(())
     }
 }

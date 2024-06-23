@@ -1,6 +1,6 @@
-use crate::app::{App,Screens, SubScreens};
-use crossterm::event::KeyEvent;
+use crate::app::{App, Screens, SubScreens};
 use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use std::rc::Rc;
 
 pub fn start_screen_events(app: &mut App, key: KeyEvent) {
@@ -58,11 +58,14 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
                 app.list_selection.select(Some(0));
             }
             3 => {
-                if app.pacman_setup_complete && app.filesystem_setup_complete && app.essentials_setup_complete{
+                if app.pacman_setup_complete
+                    && app.filesystem_setup_complete
+                    && app.essentials_setup_complete
+                {
                     app.current_screen = Screens::Installing;
+                    app.current_sub_screen = SubScreens::ConfirmInstallation;
                     app.list_selection.select(Some(0));
-                } 
-                else{
+                } else {
                     app.error_console = "Some components are not set up. Please setup all components before installing...".to_string();
                 }
             }
@@ -77,3 +80,4 @@ pub fn start_screen_events(app: &mut App, key: KeyEvent) {
         _ => {}
     }
 }
+

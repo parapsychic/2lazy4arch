@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::{pacman::Pacman, utils::{sed, DWM_SCRIPT_URL, RICE_SCRIPT_URL}};
+use crate::{pacman::Pacman, utils::{sed, RICE_SCRIPT_URL}};
 use anyhow::Result;
 use shell_iface::{logger::Logger, Shell};
 
@@ -8,7 +8,6 @@ use shell_iface::{logger::Logger, Shell};
 pub enum DesktopEnvironment {
     Gnome,
     KDE,
-    DWM,
     Hyprland,
 }
 
@@ -45,9 +44,9 @@ impl<'a> PostInstall<'a> {
         aur_packages_file: &str,
     ) -> Result<()> {
         let parsed_file = fs::read_to_string(packages_file)?;
-        let packages = parsed_file.split("\n").collect::<Vec<&str>>();
+        let packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
         self.shell.log(&format!(
-            "Installing pac--noconfirm kages with pacman: {}",
+            "Installing packages with pacman: {}",
             parsed_file
         ));
         self.pacman.pacman().install(packages)?;
@@ -59,7 +58,7 @@ impl<'a> PostInstall<'a> {
 
         self.shell.log("Installing yay");
         let parsed_file = fs::read_to_string(aur_packages_file)?;
-        let aur_packages = parsed_file.split("\n").collect::<Vec<&str>>();
+        let aur_packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
         self.shell
             .log(&format!("Installing packages with aur: {}", parsed_file));
         self.pacman.yay().install(aur_packages)?;
@@ -109,10 +108,6 @@ impl<'a> PostInstall<'a> {
                     .pacman()
                     .install(vec![&"plasma", &"kde-applications-meta"])?;
             }
-            DesktopEnvironment::DWM => {
-                self.shell.log("Installing dwm");
-                self.install_dwm()?;
-            }
             DesktopEnvironment::Hyprland => {
                 self.shell.log("Installing hyprland");
                 self.pacman
@@ -134,19 +129,10 @@ impl<'a> PostInstall<'a> {
 
         self.shell.log("Downloading ricing scripts...");
         self.shell.run_and_wait_with_args("curl", &format!("{} -o rice", RICE_SCRIPT_URL))?;
-        self.shell.run_and_wait_with_args("chmod", "+x install_dwm")?;
-        self.shell.run("./rice")?;
+        self.shell.run_and_wait_with_args("chmod", "+x rice")?;
         self.shell.log("Ricing...");
-
-        Ok(())
-    }
-
-    fn install_dwm(&mut self) -> Result<()> {
-        self.shell.log("Downloading dwm...");
-        self.shell.run_and_wait_with_args("curl", &format!("{} -o install_dwm", DWM_SCRIPT_URL))?;
-        self.shell.run_and_wait_with_args("chmod", "+x install_dwm")?;
-        self.shell.run("./install_dwm")?;
-        self.shell.log("Installed dwm.");
+        self.shell.run("./rice")?;
+        self.shell.log("Ricing complete");
 
         Ok(())
     }

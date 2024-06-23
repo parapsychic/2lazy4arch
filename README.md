@@ -2,7 +2,10 @@
 A dead simple, fast and opinionated Arch Linux Installer, written in Rust.
 
 ## How To Use?
-todo!()
+
+
+### [Note to me] ParaPsychic Mode
+To run my specific settings, run installer after base installation with the `parapsychic-mode` argument.
 
 ## How To Extend?
 todo!()

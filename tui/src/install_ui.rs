@@ -1,19 +1,26 @@
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Style},
-    text::Line,
-    widgets::{Block, Borders, Paragraph},
+    text::Text,
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
 use crate::{
-    app::App,
-    ui_utils::centered_rect,
+    app::{App, SubScreens},
+    ui_utils::show_none_screen,
 };
 
 pub fn install_screen_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
-    let setting_text = String::new();
-    format!(
+    match app.current_sub_screen {
+        SubScreens::ConfirmInstallation => install_confirm_screen_ui(f, chunk, app),
+        SubScreens::StartInstallation => install_start_screen_ui(f, chunk, app),
+        _ => show_none_screen(f, chunk, "Install"),
+    }
+}
+
+pub fn install_confirm_screen_ui(f: &mut Frame<'_>, chunk: Rect, app: &mut App<'_>) {
+    let setting_text = format!(
         "
 Filesystem:
 /boot: {} | erase: {}
@@ -65,7 +72,10 @@ username: {}
         app.username,
     );
 
-    let settings = Paragraph::new(Line::from(setting_text))
+    let text = Text::from(setting_text);
+    let settings = Paragraph::new(text)
+        .wrap(Wrap { trim: true })
+        .scroll((1, 1))
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center)
         .block(
@@ -73,5 +83,10 @@ username: {}
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::Red)),
         );
-    f.render_widget(settings, centered_rect(70, 30, chunk));
+    f.render_widget(settings, chunk);
+}
+
+pub fn install_start_screen_ui(f: &mut Frame<'_>, chunk: Rect, _: &mut App<'_>) {
+    let settings = Paragraph::new("Press Y to start installation? Although unlikely, I am not responsible if this installer does some damages to your system :)");
+    f.render_widget(settings, chunk);
 }
