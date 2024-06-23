@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 
-pub const RICE_SCRIPT_URL : &str = "";
+pub const RICE_SCRIPT_URL : &str = "https://raw.githubusercontent.com/parapsychic/2lazy4arch/main/installer/rice";
 pub const INSTALL_SUCCESS_FLAG: &str = "/var/tmp/2lazy4archinstallationflag";
 
 /// Opens a file, writes the content.
