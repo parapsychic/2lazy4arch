@@ -157,7 +157,7 @@ Built with ❤️ and Rust
 
 <sup>Hire me Bethesda, I'll work for minimum wage.</sup>
 
-<a href="https://youtu.be/Eweu-mHzmq4?si=pAnmXEZV0725b7rS" target="_blank" rel="noopener"><img src=".readme_images/hong.png" height=100px></a>
+<a href="https://youtu.be/Eweu-mHzmq4?si=pAnmXEZV0725b7rS" target="_blank" rel="noopener"><img src="https://raw.githubusercontent.com/parapsychic/ishowoff/main/.readme_images/hong.png" height=100px></a>
 
 ![2024-06-24_00-56](https://github.com/parapsychic/2lazy4arch/assets/63157522/16601791-0617-4647-bde0-2a4d73f556c6)
 
