@@ -47,8 +47,31 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .to_owned(),
         // A white divider bar to separate the two sections
         Span::styled(" | ", Style::default().fg(Color::White)),
-        // The final section of the text, with hints on what the user is editing
-        Span::styled("Not Editing Anything", Style::default().fg(Color::DarkGray)),
+
+        match app.current_sub_screen {
+    SubScreens::None => 
+        Span::styled("", Style::default().fg(Color::DarkGray)),
+    SubScreens::Partitioning => Span::styled("Partitioning ", Style::default().fg(Color::DarkGray)),
+    SubScreens::MountBoot => Span::styled("Mount Boot ", Style::default().fg(Color::DarkGray)),
+    SubScreens::MountHome => Span::styled("Mount Home ", Style::default().fg(Color::DarkGray)),
+    SubScreens::MountRoot => Span::styled("Mount Root ", Style::default().fg(Color::DarkGray)),
+    SubScreens::EraseEFI => Span::styled("Erase EFI ", Style::default().fg(Color::DarkGray)),
+    SubScreens::EraseHome => Span::styled("Erase Home ", Style::default().fg(Color::DarkGray)),
+    SubScreens::MountExtraPartition => Span::styled("Mount Extra Partitions ", Style::default().fg(Color::DarkGray)),
+    SubScreens::MountExtraPartition__Insert => Span::styled("Add New Partition", Style::default().fg(Color::DarkGray)),
+    SubScreens::ConfirmPartitions => Span::styled("Confirm Partitions ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupSwap => Span::styled("Setup Swap ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SelectTimezone => Span::styled("Select Timezone ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SelectLocale => Span::styled("Select Locale ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupHostname => Span::styled("Setup Hostname ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupRootPassword => Span::styled("Setup Root Password ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupBootloader => Span::styled("Setup Bootloader ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupSuperUserUtility => Span::styled("Setup SuperUser Utility ", Style::default().fg(Color::DarkGray)),
+    SubScreens::SetupUser => Span::styled("Setup User ", Style::default().fg(Color::DarkGray)),
+    SubScreens::ConfirmInstallation => Span::styled("Confirm  Installation ", Style::default().fg(Color::DarkGray)),
+    SubScreens::StartInstallation => Span::styled("Start Installation ", Style::default().fg(Color::DarkGray)),
+}
+        .to_owned(),
     ];
 
     let mode_footer = Paragraph::new(Line::from(current_navigation_text))
