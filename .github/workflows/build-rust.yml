@@ -34,7 +34,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: target/release/tui
-        tag_name: testing-${{ steps.date.outputs.date }}
+        tag_name: release-${{ steps.date.outputs.date }}
         release_name: Release ${{ github.event.after }}
         prerelease: true
     - name: upload linux artifact
