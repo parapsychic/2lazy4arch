@@ -1,17 +1,15 @@
 # 2Lazy4Arch: Installing Arch Really Fast
 A dead simple, fast and opinionated Arch Linux Installer, written in Rust.
 
-## How To Use?
-This is a two-part installation process. 
-
-The first part installs till a bootable system. If this is all that you need, complete the part one of this guide.
-
-For the second part, you might need to set up some files.
-
-### Part 1: Installing the base system
-The base installer partitions and mounts the filesystem, installs important packages and sets up the users and hostname.
-
-Here is a list of all programs that are installed at this stage:
+## What to Expect?
+- File partitioning using `cfdisk`.
+- Reflector to sync pacman mirrors.
+- (1,2,4,8,16,32, 64) GB Swapfile instead of swap partition.
+- Yay as AUR package manager.
+- Gnome/KDE/Hyprland as Desktop Environment / Window Manager options
+- Sudo/Doas
+- Grub/SystemD Boot as Bootloader
+- The following programs:
 ```
 base
 linux
@@ -36,10 +34,17 @@ bluez-utils
 pulseaudio-bluetooth
 alsa-utils
 cups
-sudo/doas (prompted)
-grub (if selected)
-```
+  ```
 
+## How To Use?
+This is a two-part installation process. 
+
+The first part installs till a bootable system. If this is all that you need, complete the part one of this guide.
+
+For the second part, you might need to set up some files.
+
+### Part 1: Installing the base system
+The base installer partitions and mounts the filesystem, installs important packages and sets up the users and hostname.
 To run it as it is, use curl to download the release and run it. Replace the version with the release tag.
 
 ```sh
@@ -48,6 +53,7 @@ To run it as it is, use curl to download the release and run it. Replace the ver
 curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch --output 2lazy4arch
 ./2lazy4arch
 ```
+Follow the onscreen instructions.
 The TUI is intuitive and also supports vim-style `jk` movements.
 
 Now that installation is successful, you should see either one of the following messages
@@ -142,4 +148,4 @@ todo!("Fix typos in screenshots")
 ![image](https://github.com/parapsychic/2lazy4arch/assets/63157522/f4387ec0-e7f6-4d07-96c1-ac721e4e5ca5)
 
 ## FAQ
-todo!()
+
