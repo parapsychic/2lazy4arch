@@ -140,12 +140,14 @@ After that, run the compile and run the program with the argument `parapsychic-m
 You can change the argument name, but I made this specifically for running my scripts.
 
 ## Screenshots:
-todo!("Fix typos in screenshots")
-![image](https://github.com/parapsychic/2lazy4arch/assets/63157522/63936ddf-b607-4d6d-859d-fb2f578deeef)
+![2024-06-24_00-50](https://github.com/parapsychic/2lazy4arch/assets/63157522/d3b8e8b0-4509-47f1-8a3f-7d64ced6eedb)
 
-![image](https://github.com/parapsychic/2lazy4arch/assets/63157522/27c668e8-3df8-41b8-9395-f667ea961894)
+![2024-06-24_00-51](https://github.com/parapsychic/2lazy4arch/assets/63157522/e391206a-e384-4dd2-9ff6-7c0d85d9b845)
 
-![image](https://github.com/parapsychic/2lazy4arch/assets/63157522/f4387ec0-e7f6-4d07-96c1-ac721e4e5ca5)
+![2024-06-24_00-52_1](https://github.com/parapsychic/2lazy4arch/assets/63157522/4abdc61d-c80e-4d6c-a233-1ad944b5f1ec)
 
-## FAQ
+![2024-06-24_00![2024-06-24_00-53](https://github.com/parapsychic/2lazy4arch/assets/63157522/ec38c16b-7866-49b0-aa6f-c33d8e418875)
+-52](https://github.com/parapsychic/2lazy4arch/assets/63157522/bee3d071-2ed6-4891-ba19-3b4655b42322)
+
+
 
