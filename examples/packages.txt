@@ -1,0 +1,10 @@
+picom
+rofi
+lua-language-server
+ripgrep
+fd
+pavucontrol
+pulseaudio-alsa
+lf
+xclip
+flameshot

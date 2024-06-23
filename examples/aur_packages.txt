@@ -1,0 +1,4 @@
+librewolf
+ttf-ms-fonts
+rofi-emoji
+psst-git
