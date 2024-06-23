@@ -147,7 +147,9 @@ You can change the argument name, but I made this specifically for running my sc
 ![2024-06-24_00-52_1](https://github.com/parapsychic/2lazy4arch/assets/63157522/4abdc61d-c80e-4d6c-a233-1ad944b5f1ec)
 
 ![2024-06-24_00![2024-06-24_00-53](https://github.com/parapsychic/2lazy4arch/assets/63157522/ec38c16b-7866-49b0-aa6f-c33d8e418875)
+
 -52](https://github.com/parapsychic/2lazy4arch/assets/63157522/bee3d071-2ed6-4891-ba19-3b4655b42322)
+![2024-06-24_00-56](https://github.com/parapsychic/2lazy4arch/assets/63157522/16601791-0617-4647-bde0-2a4d73f556c6)
 
 
 
