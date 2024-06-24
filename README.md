@@ -54,6 +54,7 @@ curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy
 ./2lazy4arch
 ```
 Follow the onscreen instructions.
+
 The TUI is intuitive and also supports vim-style `jk` movements.
 
 Now that installation is successful, you should see either one of the following messages
@@ -81,7 +82,9 @@ Otherwise, continue with step 2.
 
 ### Part 2: Post Installation
 If you got the success message from last step, an installer file will be present in your `home` folder.
+
 If not, now is your chance to copy the 2Lazy4Arch executable to your `home` folder.
+
 ```sh
 cp 2lazy4arch /mnt/home/{username}/installer
 ```
@@ -94,6 +97,8 @@ Before we begin, we should create two files.
 
 Name them whatever you like. For this example, I'll be calling the `packages.txt` and `aur_packages.txt`.
 
+You can refer to the [example files](https://github.com/parapsychic/2lazy4arch/tree/main/examples).
+
 These files expect valid package names separated by a newline.
 
 Packages in `packages.txt` will be installed using `pacman`.
@@ -105,10 +110,14 @@ Start installation by running the installer file.
 ./installer
 ```
 This has no TUI as there were some hiccups along the way with the terminal input/output piping, so this will be completely CLI based.
+
 When prompted, enter the relative path to the packages files.
+
 Keep an eye-out for prompts to enter the password.
+
 After completing the installer will show a message: "Installation has finished. Enjoy!".
-See [How To Extend?](how-to-extend?) to know how to run post-install hooks/scripts
+
+See [How To Extend?](#how-to-extend?) to know how to run post-install hooks/scripts
 
 #### [Note to me] ParaPsychic Mode
 To run my specific settings, run installer after base installation with the `parapsychic-mode` argument.
@@ -116,6 +125,7 @@ To run my specific settings, run installer after base installation with the `par
 
 #### Compiling
 Install rust by following this [guide](https://www.rust-lang.org/learn/get-started).
+
 Then, clone this repo and compile it.
 ```sh
 git clone https://github.com/parapsychic/2lazy4arch.git
@@ -131,8 +141,11 @@ The compiled binary will be at `target/release/toolazy4arch`. The naming is diff
 
 ### Ricing
 To run your own ricing scripts after installation:
+
 Go to `installer/src/utils` and change the RICE_SCRIPT_URL
+
 The script is downloaded using `curl`, so be sure to host it somewhere.
+
 After that, run the compile and run the program with the argument `parapsychic-mode`.
 ```sh
 ./2lazy4arch parapsychic-mode
