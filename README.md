@@ -66,7 +66,7 @@ Failed to get the executable name from arguments.
 Failed to copy the installer.
 Please copy the file manually to /some/path
 
-# SUCCESSFUL:
+# SUCCESS:
 Successfully copied the executable to /some/path. 
 Please run the installer after rebooting to the installed system.
 Installer completed successfully.
@@ -117,7 +117,7 @@ Keep an eye-out for prompts to enter the password.
 
 After completing the installer will show a message: "Installation has finished. Enjoy!".
 
-See [How To Extend?](#how-to-extend?) to know how to run post-install hooks/scripts
+See [How To Extend?](#how-to-extend) to know how to run post-install hooks/scripts
 
 #### [Note to me] ParaPsychic Mode
 To run my specific settings, run installer after base installation with the `parapsychic-mode` argument.
@@ -137,7 +137,7 @@ The compiled binary will be at `target/release/toolazy4arch`. The naming is diff
 
 ## How To Extend?
 ### Packages
-2Lazy4Arch expects you to make some files before running the post installer. Refer to the [How-To-Use?](#how-to-use?) section to learn more.
+2Lazy4Arch expects you to make some files before running the post installer. Refer to the [How-To-Use?](#how-to-use) section to learn more.
 
 ### Ricing
 To run your own ricing scripts after installation:
@@ -146,7 +146,7 @@ Go to `installer/src/utils` and change the RICE_SCRIPT_URL
 
 The script is downloaded using `curl`, so be sure to host it somewhere.
 
-After that, run the compile and run the program with the argument `parapsychic-mode`.
+After that, [compile](#compiling) and run the program with the argument `parapsychic-mode`.
 ```sh
 ./2lazy4arch parapsychic-mode
 ```
