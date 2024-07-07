@@ -43,6 +43,8 @@ impl<'a> PostInstall<'a> {
         packages_file: &str,
         aur_packages_file: &str,
     ) -> Result<()> {
+        self.shell.log("Installing packages:");
+        self.shell.log("Parsing files");
         let parsed_file = fs::read_to_string(packages_file)?;
         let packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
         self.shell.log(&format!(
