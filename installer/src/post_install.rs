@@ -45,12 +45,13 @@ impl<'a> PostInstall<'a> {
     ) -> Result<()> {
         self.shell.log("Installing packages:");
         self.shell.log("Parsing files");
-        let parsed_file = fs::read_to_string(packages_file)?;
+        let parsed_file = fs::read_to_string(packages_file.trim())?;
         let packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
         self.shell.log(&format!(
             "Installing packages with pacman: {}",
             parsed_file
         ));
+
         self.pacman.pacman().install(packages)?;
 
         if self.is_yay_installed {
@@ -59,7 +60,7 @@ impl<'a> PostInstall<'a> {
         }
 
         self.shell.log("Installing yay");
-        let parsed_file = fs::read_to_string(aur_packages_file)?;
+        let parsed_file = fs::read_to_string(aur_packages_file.trim())?;
         let aur_packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
         self.shell
             .log(&format!("Installing packages with aur: {}", parsed_file));
