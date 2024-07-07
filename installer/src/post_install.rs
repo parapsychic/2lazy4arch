@@ -54,7 +54,7 @@ impl<'a> PostInstall<'a> {
 
         self.pacman.pacman().install(packages)?;
 
-        if self.is_yay_installed {
+        if !self.is_yay_installed {
             self.shell.log("Installing yay");
             self.setup_yay()?;
         }
