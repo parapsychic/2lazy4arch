@@ -3,8 +3,10 @@ rofi
 lua-language-server
 ripgrep
 fd
-pavucontrol
-pulseaudio-alsa
+pipewire
+pipewire-pulse
+pipewire-jack
+pipewire-alsa
 lf
 xclip
 flameshot

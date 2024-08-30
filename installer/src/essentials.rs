@@ -244,7 +244,10 @@ impl<'a> Essentials<'a> {
             "linux-headers",
             "bluez",
             "bluez-utils",
-            "pulseaudio-bluetooth",
+            "pipewire",
+            "pipewire-pulse",
+            "pipewire-jack",
+            "pipewire-alsa",
             "alsa-utils",
             "cups",
         ];
