@@ -53,7 +53,7 @@ To run it as it is, use curl to download the release and run it. Replace the ver
 ```sh
 # curl -L https://github.com/parapsychic/2lazy4arch/releases/download/{release}/2lazy4arch --output 2lazy4arch
 #eg:
-curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2azy4arch --output 2lazy4arch
+curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch --output 2lazy4arch
 chmod +x 2lazy4arch
 ./2lazy4arch
 ```
