@@ -51,10 +51,14 @@ The base installer partitions and mounts the filesystem, installs important pack
 To run it as it is, use curl to download the release and run it. Replace the version with the release tag.
 
 ```sh
-# curl -L https://github.com/parapsychic/2lazy4arch/releases/download/{release}/2lazy4arch --output 2lazy4arch
+# curl -L https://github.com/parapsychic/2lazy4arch/releases/download/{release}/2lazy4arch \
+#  --output 2lazy4arch
 #eg:
-curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2azy4arch --output 2lazy4arch
+curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch \
+ --output 2lazy4arch
+
 chmod +x 2lazy4arch
+
 ./2lazy4arch
 ```
 Follow the onscreen instructions.
@@ -94,7 +98,8 @@ cp 2lazy4arch /mnt/home/{username}/installer
 ```
 > If you accidentally rebooted in the last step, just download the installer again
 > ```sh
-> curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch --output 2lazy4arch
+> curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch \
+>  --output 2lazy4arch
 > ```
 
 Before we begin, we should create two files. 
