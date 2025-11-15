@@ -379,10 +379,10 @@ options root=UUID={} rw",
         }
 
         // write default entry
-        write_to_file("/loader/entries/arch.conf", &default_conf)?;
+        write_to_file("/boot/loader/entries/arch.conf", &default_conf)?;
 
         // write default entry
-        write_to_file("/loader/entries/arch-fallback.conf", &fallback_conf)?;
+        write_to_file("/boot/loader/entries/arch-fallback.conf", &fallback_conf)?;
         Ok(())
     }
 
