@@ -249,6 +249,7 @@ impl<'a> Essentials<'a> {
             "pipewire-jack",
             "pipewire-alsa",
             "alsa-utils",
+            "git",
             "cups",
         ];
 
