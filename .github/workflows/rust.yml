@@ -3,7 +3,8 @@ name: Rust Release
 on:
   push:
     tags:
-      - "2.0.**"  
+      - 2.**
+
   workflow_dispatch:
 
 env:
