@@ -1,0 +1,36 @@
+name: Rust Release
+
+on:
+  push:
+    tags:
+      - "2.0.*"  
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary (no tests)
+        run: cargo build --release --verbose
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          cp target/release/* artifacts/
+          # keep only executable files
+          find artifacts -type f ! -perm -111 -delete
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
