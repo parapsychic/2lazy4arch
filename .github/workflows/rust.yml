@@ -3,7 +3,7 @@ name: Rust Release
 on:
   push:
     tags:
-      - "2.0.*"  
+      - "2.0.**"  
 
 env:
   CARGO_TERM_COLOR: always
