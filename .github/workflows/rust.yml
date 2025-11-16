@@ -25,9 +25,7 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir artifacts
-          cp target/release/* artifacts/
-          # keep only executable files
-          find artifacts -type f ! -perm -111 -delete
+          cp target/release/2lazy4arch artifacts/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
