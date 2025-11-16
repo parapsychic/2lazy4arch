@@ -25,7 +25,7 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir artifacts
-          cp target/release/2lazy4arch artifacts/
+          cp target/release/toolazy4arch artifacts/2lazy4arch
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
