@@ -45,6 +45,15 @@ pub struct BlockDevice {
     pub rm: bool,
     /// Partition table: "gpt", "dos" or none
     pub pttype: Option<String>,
+    /// Spinning disk
+    #[serde(default)]
+    pub rota: bool,
+    #[serde(default)]
+    pub ro: bool,
+    #[serde(rename = "log-sec")]
+    pub log_sec: Option<u64>,
+    #[serde(rename = "phy-sec")]
+    pub phy_sec: Option<u64>,
 }
 
 impl BlockDevice {
@@ -91,7 +100,7 @@ struct Lsblk {
 pub fn lsblk(shell: &mut Shell) -> Result<Vec<BlockDevice>> {
     let output = shell.run_with_args(
         "lsblk",
-        "--json --list --bytes -e 1,11 -o PATH,TYPE,SIZE,FSTYPE,PARTTYPENAME,LABEL,PARTLABEL,PARTUUID,UUID,MODEL,PKNAME,TRAN,RM,PTTYPE",
+        "--json --list --bytes -e 1,11 -o PATH,TYPE,SIZE,FSTYPE,PARTTYPENAME,LABEL,PARTLABEL,PARTUUID,UUID,MODEL,PKNAME,TRAN,RM,PTTYPE,ROTA,RO,LOG-SEC,PHY-SEC",
     )?;
     Ok(serde_json::from_slice::<Lsblk>(&output.stdout)?.blockdevices)
 }
@@ -108,6 +117,9 @@ pub struct System {
     pub interfaces: Vec<String>,
     pub wireless: Vec<String>,
     pub kernel: String,
+    pub memory_kib: u64,
+    /// Interfaces whose link is up
+    pub links_up: Vec<String>,
 }
 
 impl System {
@@ -124,6 +136,18 @@ impl System {
             interfaces,
             wireless,
             kernel: fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim().to_string(),
+            memory_kib: fs::read_to_string("/proc/meminfo")
+                .unwrap_or_default()
+                .lines()
+                .find_map(|l| l.strip_prefix("MemTotal:")?.trim().strip_suffix("kB")?.trim().parse().ok())
+                .unwrap_or(0),
+            links_up: fs::read_dir("/sys/class/net")
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name() != "lo" && fs::read_to_string(e.path().join("operstate")).is_ok_and(|s| s.trim() == "up"))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect(),
         }
     }
 

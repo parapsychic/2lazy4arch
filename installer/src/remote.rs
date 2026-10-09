@@ -53,7 +53,8 @@ fn vnc(cfg: &Config, target: &mut Target) -> Result<Vec<String>> {
     match cfg.desktop {
         // one server for the display, login screen included
         Desktop::Dwm | Desktop::Xfce | Desktop::Lxde => {
-            target.run("x11vnc", &format!("-storepasswd {} /etc/x11vnc.pass", quote(&password)))?;
+            // the password goes in on stdin, so it never shows up in the install's output
+            target.run_with_input("sh", "-c 'read -r pw && x11vnc -storepasswd \"$pw\" /etc/x11vnc.pass'", &format!("{password}\n"))?;
             let view_only = if vnc.view_only { " -viewonly" } else { "" };
             target::write(
                 "/etc/systemd/system/2lazy4arch-x11vnc.service",

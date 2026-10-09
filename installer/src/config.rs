@@ -1078,6 +1078,22 @@ impl Config {
         set
     }
 
+    /// Every password and key in the config, to keep out of the install's output.
+    pub fn secrets(&self) -> Vec<String> {
+        let mut secrets: Vec<Option<String>> = vec![self.root_password.clone(), self.vnc().and_then(|v| v.password.clone()), self.tailscale().and_then(|t| t.auth_key.clone())];
+        secrets.extend(self.users.iter().map(|u| u.password.clone()));
+        for c in &self.network.connections {
+            secrets.push(c.password.clone());
+            if let Some(eap) = &c.eap {
+                secrets.extend([eap.password.clone(), eap.private_key_password.clone()]);
+            }
+        }
+        if let Some(docker) = &self.docker {
+            secrets.extend(docker.login.iter().map(|l| Some(l.password.clone())));
+        }
+        secrets.into_iter().flatten().collect()
+    }
+
     /// Merges packages.pacman_list / aur_list into pacman / aur.
     pub fn load_lists(&mut self, source: &Source) -> Result<()> {
         let read = |path: &Option<String>| -> Result<Vec<String>> {

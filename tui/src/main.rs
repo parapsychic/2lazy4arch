@@ -345,11 +345,22 @@ fn event_loop(terminal: &mut Term, app: &mut App, start: &dyn Fn(&App) -> anyhow
         }
 
         if let Some(install) = &mut app.install {
+            let running = install.status == term::Status::Running;
+            if key.code != KeyCode::Char('q') {
+                install.abort_armed = false;
+            }
             match (install.status, key.code) {
                 (_, KeyCode::PageUp) => install.scroll(10),
                 (_, KeyCode::PageDown) => install.scroll(-10),
                 (term::Status::Finished(ok), KeyCode::Char('q') | KeyCode::Enter | KeyCode::Esc) => return Ok(Some(ok)),
-                (term::Status::Running, _) => install.send(key),
+                // q twice: ctrl+c to the installer
+                (_, KeyCode::Char('q')) if install.abort_armed => install.send(crossterm::event::KeyEvent::new(KeyCode::Char('c'), crossterm::event::KeyModifiers::CONTROL)),
+                (_, KeyCode::Char('q')) => install.abort_armed = true,
+                (_, KeyCode::Char('p') | KeyCode::Char('P')) if running => install.paused = !install.paused,
+                (_, KeyCode::Char('s') | KeyCode::Char('S')) => install.toggle_autoscroll(),
+                (_, KeyCode::Char('c') | KeyCode::Char('C')) if key.modifiers.is_empty() => install.clear(),
+                // the rest (y/n for its prompt, ctrl+c) goes to the installer
+                _ if running => install.send(key),
                 _ => {}
             }
             continue;

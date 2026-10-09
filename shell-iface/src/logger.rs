@@ -16,7 +16,7 @@ impl Logger {
     /// Always goes to LOG_FILE (when writable); printed only when is_debug
     /// (stray prints would garble the TUI).
     pub fn debug(&self, origin: &str, msg: &str) {
-        let content = format!("{}: {}", origin.to_uppercase(), msg);
+        let content = format!("{}: {}", origin.to_uppercase(), crate::redact(msg));
         if self.is_debug {
             println!("{}", content);
         }
