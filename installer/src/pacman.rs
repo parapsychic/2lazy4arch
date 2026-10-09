@@ -1,10 +1,14 @@
-use anyhow::{anyhow, Result};
+use std::process::Command;
+
+use anyhow::{bail, Result};
 use nix::unistd::Uid;
 use shell_iface::{logger::Logger, Shell};
 
-enum PackageManager{
+use crate::target::ROOT;
+
+enum PackageManager {
     Pacman,
-    Yay
+    Yay,
 }
 
 pub struct Pacman<'a> {
@@ -13,6 +17,10 @@ pub struct Pacman<'a> {
     /// or the acutal installed machine
     is_non_root: bool,
     program: PackageManager,
+    /// Runs pacman inside the system at /mnt (arch-chroot) instead of the live one.
+    in_target: bool,
+    /// Packages install() skipped because they don't exist.
+    pub skipped: Vec<String>,
 }
 
 impl<'a> Pacman<'a> {
@@ -23,137 +31,165 @@ impl<'a> Pacman<'a> {
         Pacman {
             shell,
             is_non_root,
-            program: PackageManager::Pacman
+            program: PackageManager::Pacman,
+            in_target: false,
+            skipped: vec![],
         }
+    }
+
+    /// pacman for the system being installed at /mnt.
+    pub fn in_target<'b>(logger: &'b Logger) -> Pacman<'b> {
+        Pacman { in_target: true, ..Pacman::new(logger) }
     }
 
     pub fn yay(&mut self) -> &mut Self {
         self.program = PackageManager::Yay;
-        return self;
+        self
     }
 
     pub fn pacman(&mut self) -> &mut Self {
         self.program = PackageManager::Pacman;
-        return self;
+        self
+    }
+
+    /// pacman runs through sudo when we're not root; yay must not be root and calls sudo itself.
+    fn run(&mut self, args: &str) -> Result<()> {
+        match (&self.program, self.is_non_root) {
+            (PackageManager::Pacman, _) if self.in_target => {
+                self.shell.run_and_wait_with_args("arch-chroot", &format!("{ROOT} pacman {args}"))?
+            }
+            (PackageManager::Pacman, false) => self.shell.run_and_wait_with_args("pacman", args)?,
+            (PackageManager::Pacman, true) => {
+                self.shell.run_and_wait_with_args("sudo", &format!("pacman {args}"))?
+            }
+            (PackageManager::Yay, true) => self.shell.run_and_wait_with_args("yay", args)?,
+            (PackageManager::Yay, false) => {
+                self.shell.log("ERROR: Called YAY as root.");
+                bail!("yay can't run as root");
+            }
+        };
+        Ok(())
     }
 
     pub fn update_mirrors(&mut self) -> Result<()> {
-        let status = if self.is_non_root {
-            self.shell.run_and_wait_with_args(
-                "su",
-                &format!("-c \"{} -Syyy --noconfirm\"", self.get_program()),
-            )?
-        } else {
-            if let PackageManager::Yay = self.program {
-                self.shell.log("ERROR: Called YAY as root.");
-                return Err(anyhow!("PACMAN: Called yay as root"));
-            }
-
-            self.shell
-                .run_and_wait_with_args("pacman", "-Syyy --noconfirm")?
-        };
-
-        if !status.success() {
-            self.shell
-                .log("PACMAN: Could not update pacman. Failed when running pacman -Syyyu.");
-            return Err(anyhow!("Could not update pacman lists"));
-        }
-        Ok(())
+        self.run("-Syy --noconfirm")
     }
 
-    pub fn install(&mut self, packages: Vec<&str>) -> Result<()> {
+    /// Installs what exists and skips (and reports) what doesn't, instead of
+    /// failing the whole transaction on one bad name.
+    pub fn install(&mut self, packages: &[&str]) -> Result<()> {
+        if packages.is_empty() {
+            return Ok(());
+        }
+        // fresh databases so the check is accurate; the -Su below completes the -Syu
+        self.run("-Sy --noconfirm")?;
+        let packages = self.keep_available(packages)?;
+        if packages.is_empty() {
+            return Ok(());
+        }
         let packages = packages.join(" ");
-
-        self.shell.log(&format!("Installing {}.", packages));
-
-        let status = if self.is_non_root {
-            self.shell.run_and_wait_with_args(
-                "su",
-                &format!("-c \"{} -Syu --noconfirm {}\"", self.get_program(), packages),
-            )?
-        } else {
-            if let PackageManager::Yay = self.program {
-                self.shell.log("ERROR: Called YAY as root.");
-                return Err(anyhow!("PACMAN: Called yay as root"));
-            }
-
-            self.shell
-                .run_and_wait_with_args("pacman", &format!("-Syu --noconfirm {}", packages))?
-        };
-
-        if !status.success() {
-            self.shell
-                .log(&format!("PACMAN: Could not install {}.", packages));
-            return Err(anyhow!("Could not install {}", packages));
-        }
-
-        Ok(())
+        self.shell.log(&format!("Installing {packages}."));
+        self.run(&format!("-Su --needed --noconfirm {packages}"))
     }
 
-    pub fn uninstall(&mut self, packages: Vec<&str>) -> Result<()> {
-        let packages = packages.join(" ");
-        self.shell.log(&format!("Uninstalling {}.", packages));
-
-        let status = if self.is_non_root {
-            self.shell.run_and_wait_with_args(
-                "su",
-                &format!("-c \"{} -Rns --noconfirm {}\"", self.get_program(), packages),
-            )?
-        } else {
-
-            if let PackageManager::Yay = self.program {
-                self.shell.log("ERROR: Called YAY as root.");
-                return Err(anyhow!("PACMAN: Called yay as root"));
+    /// Drops the packages that don't exist: not in the repos, or for yay, not in the AUR either.
+    /// Prints them and remembers them in `skipped`. Sync the databases first.
+    pub fn keep_available<'p>(&mut self, packages: &[&'p str]) -> Result<Vec<&'p str>> {
+        let mut missing = self.missing_from_repos(packages)?;
+        let place = match self.program {
+            PackageManager::Pacman => "in the repos",
+            PackageManager::Yay => {
+                missing = self.missing_from_aur(missing);
+                "in the repos or the AUR"
             }
-            self.shell
-                .run_and_wait_with_args("pacman", &format!("-Rns --noconfirm {}", packages))?
         };
-
-        if !status.success() {
-            self.shell
-                .log(&format!("Could not uninstall {}.", packages));
-            return Err(anyhow!("Could not uninstall {}", packages));
+        if !missing.is_empty() {
+            println!("\x1b[1;33mNot found {place}, skipping:\x1b[0m {}", missing.join(" "));
+            self.skipped.extend(missing.iter().cloned());
         }
-
-        Ok(())
+        Ok(packages.iter().copied().filter(|p| !missing.iter().any(|m| m == p)).collect())
     }
 
-    /// newer arch isos include reflector by default. this should be used in the live environment
-    /// only. Using it in chroot without reflector installed might panic.
+    /// Names pacman can't resolve from the synced databases. Groups and provides
+    /// (e.g. libva-mesa-driver -> mesa) count as found, same as for `pacman -S`.
+    pub fn missing_from_repos(&mut self, packages: &[&str]) -> Result<Vec<String>> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
+        // Not through Shell: we need stderr from a failing run. One call reports every missing target.
+        let mut command = if self.in_target {
+            let mut c = Command::new("arch-chroot");
+            c.args([ROOT, "pacman"]);
+            c
+        } else {
+            Command::new("pacman")
+        };
+        let output = command
+            .env("LC_ALL", "C")
+            .args(["-Sp", "--print-format", "%n", "--"])
+            .args(packages)
+            .output()?;
+        Ok(String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter_map(|l| l.strip_prefix("error: target not found: "))
+            .map(String::from)
+            .collect())
+    }
+
+    /// Of `packages`, the ones the AUR doesn't have either. If the AUR can't be
+    /// reached, nothing is skipped and yay gets to try.
+    fn missing_from_aur(&mut self, packages: Vec<String>) -> Vec<String> {
+        if packages.is_empty() {
+            return packages;
+        }
+        let query = packages
+            .iter()
+            .map(|p| format!("arg[]={}", p.replace('+', "%2B")))
+            .collect::<Vec<_>>()
+            .join("&");
+        let response = self
+            .shell
+            .run_with_args("curl", &format!("-gfsS --max-time 30 https://aur.archlinux.org/rpc/v5/info?{query}"))
+            .ok()
+            .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok());
+        let Some(response) = response else {
+            println!("Couldn't reach the AUR to check {}, letting yay try.", packages.join(" "));
+            return vec![];
+        };
+        let found: Vec<&str> = response["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r["Name"].as_str())
+            .collect();
+        packages.into_iter().filter(|p| !found.contains(&p.as_str())).collect()
+    }
+
+    /// Ranks the country's mirrors. Live environment only (it ships reflector, we're root).
     pub fn run_reflector(&mut self, country: &str) -> Result<()> {
-        let status = if self.is_non_root {
-            self.shell.run_and_wait_with_args(
-                "su",
-                &format!(
-                    "-c \"reflector -c {} --sort rate --save /etc/pacman.d/mirrorlist\"",
-                    country
-                ),
-            )?
-        } else {
-            self.shell.run_and_wait_with_args(
-                "reflector",
-                &format!("-c {} --sort rate --save /etc/pacman.d/mirrorlist", country),
-            )?
-        };
-
-        if !status.success() {
-            self.shell
-                .log("PACMAN: Reflector failed. Exited with non-zero status.");
-            return Err(anyhow!(
-                "Could not retrieve new pacman mirrors from reflector."
-            ));
-        }
-
-        self.update_mirrors()?;
-
+        // --latest keeps `--sort rate` from benchmarking every mirror in big countries
+        self.shell.run_and_wait_with_args(
+            "reflector",
+            &format!("-c '{country}' --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist"),
+        )?;
         Ok(())
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn get_program(&self) -> &str {
-        match self.program {
-            PackageManager::Pacman => &"pacman",
-            PackageManager::Yay => &"yay",
-        }
+    /// Needs Arch with synced databases and network: cargo test -- --ignored
+    #[test]
+    #[ignore]
+    fn reports_only_missing_packages() {
+        let logger = Logger::new(false);
+        let mut pacman = Pacman::new(&logger);
+        // a package, a group, a provide, an AUR package, a typo
+        let wanted = ["firefox", "gnome", "libva-mesa-driver", "brave-bin", "not-a-package-xyz"];
+        assert_eq!(pacman.missing_from_repos(&wanted).unwrap(), ["brave-bin", "not-a-package-xyz"]);
+        assert_eq!(pacman.yay().keep_available(&wanted).unwrap(), ["firefox", "gnome", "libva-mesa-driver", "brave-bin"]);
+        assert_eq!(pacman.skipped, ["not-a-package-xyz"]);
     }
 }

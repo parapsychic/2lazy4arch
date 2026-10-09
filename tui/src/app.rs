@@ -1,1295 +1,1090 @@
-use std::rc::Rc;
-
+use anyhow::{bail, Result};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use installer::{
-    base_installer::BaseInstaller,
-    essentials::{Bootloader, Essentials, SuperUserUtility},
+    config::{
+        default_layout, nvidia_driver_for, Browser, Config, Desktop, DiskPlan, Docker, FormatChoice, GpuChoice, GpuDriver, Home, LoginShell, OtherMount, ParaMode, Root, Ssh, Swap, Tailscale, User, Vnc,
+        MIRROR_COUNTRIES,
+    },
+    essentials::{Bootloader, SuperUserUtility},
     filesystem_tasks::Filesystem,
-    pacman::Pacman,
+    system::{lsblk, BlockDevice, GpuVendor, System},
+    utils::is_valid_mount_point,
+    validate,
 };
 use ratatui::widgets::ListState;
-use shell_iface::logger::Logger;
+use serde_json::json;
+use shell_iface::{logger::Logger, Shell};
 
-pub enum Screens {
-    StartScreen,
-    Filesystem,
-    Pacman,
-    Essentials,
-    Installing,
-    Exiting,
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Step {
+    Partition,
+    Boot,
+    FormatBoot,
+    Root,
+    Home,
+    FormatHome,
+    ExtraMounts,
+    Swap,
+    Mirrors,
+    Timezone,
+    Locale,
+    Accounts,
+    Shell,
+    MoreUsers,
+    Bootloader,
+    Privilege,
+    Nvidia,
+    Amd,
+    Desktop,
+    Autologin,
+    Browser,
+    Wifi,
+    Extras,
+    Packages,
+    Finish,
+    Review,
 }
 
-pub enum SubScreens {
+pub const STEPS: [Step; 26] = [
+    Step::Partition,
+    Step::Boot,
+    Step::FormatBoot,
+    Step::Root,
+    Step::Home,
+    Step::FormatHome,
+    Step::ExtraMounts,
+    Step::Swap,
+    Step::Mirrors,
+    Step::Timezone,
+    Step::Locale,
+    Step::Accounts,
+    Step::Shell,
+    Step::MoreUsers,
+    Step::Bootloader,
+    Step::Privilege,
+    Step::Nvidia,
+    Step::Amd,
+    Step::Desktop,
+    Step::Autologin,
+    Step::Browser,
+    Step::Wifi,
+    Step::Extras,
+    Step::Packages,
+    Step::Finish,
+    Step::Review,
+];
+
+// Choice tables: (value, label). The part before " - " is the short name.
+pub const SWAP_SIZES: [Option<u32>; 8] = [None, Some(1), Some(2), Some(4), Some(8), Some(16), Some(32), Some(64)];
+pub const BOOTLOADERS: [(Bootloader, &str); 2] = [
+    (Bootloader::Grub, "GRUB - can also boot other OSes"),
+    (Bootloader::SystemDBoot, "systemd-boot - minimal and fast"),
+];
+pub const PRIVILEGE: [(SuperUserUtility, &str); 2] = [
+    (SuperUserUtility::Sudo, "sudo"),
+    (SuperUserUtility::Doas, "doas - sudo stays installed (base-devel)"),
+];
+pub const SHELLS: [(LoginShell, &str); 3] = [(LoginShell::Bash, "bash"), (LoginShell::Zsh, "zsh"), (LoginShell::Fish, "fish")];
+pub const NVIDIA: [(GpuDriver, &str); 3] = [
+    (GpuDriver::Nvidia, "Proprietary - GTX 16xx, RTX and newer"),
+    (GpuDriver::NvidiaLegacy, "Proprietary legacy - GTX 9xx/10xx (AUR)"),
+    (GpuDriver::Nouveau, "Nouveau - open source, slower"),
+];
+pub const AMD: [(GpuDriver, &str); 2] = [
+    (GpuDriver::Amd, "Mesa - open source, recommended"),
+    (GpuDriver::AmdPro, "Mesa + AMDGPU PRO - proprietary (AUR)"),
+];
+pub const DESKTOPS: [(Desktop, &str); 7] = [
+    (Desktop::Dwm, "DWM (Xorg) - with dmenu and st"),
+    (Desktop::Hyprland, "Hyprland (Wayland) - with kitty"),
+    (Desktop::Kde, "KDE Plasma"),
+    (Desktop::Gnome, "GNOME"),
+    (Desktop::Xfce, "Xfce"),
+    (Desktop::Lxde, "LXDE"),
+    (Desktop::None, "None - console only"),
+];
+pub const BROWSERS: [(Browser, &str); 8] = [
+    (Browser::Firefox, "Firefox"),
+    (Browser::Librewolf, "LibreWolf"),
+    (Browser::Chromium, "Chromium"),
+    (Browser::Vivaldi, "Vivaldi"),
+    (Browser::Brave, "Brave - AUR"),
+    (Browser::Zen, "Zen - AUR"),
+    (Browser::Chrome, "Google Chrome - AUR"),
+    (Browser::None, "None"),
+];
+pub const FINISH: [(installer::config::Finish, &str); 3] = [
+    (installer::config::Finish::Reboot, "Reboot into the new system"),
+    (installer::config::Finish::Poweroff, "Power off"),
+    (installer::config::Finish::Stay, "Stay on the ISO - the new system stays mounted at /mnt"),
+];
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Extra {
+    Ssh,
+    Tailscale,
+    Vnc,
+    Docker,
+    Multilib,
+    Rice,
+}
+
+pub const EXTRAS: [(Extra, &str); 6] = [
+    (Extra::Ssh, "SSH server"),
+    (Extra::Tailscale, "Tailscale"),
+    (Extra::Vnc, "VNC remote desktop"),
+    (Extra::Docker, "Docker and Compose"),
+    (Extra::Multilib, "multilib repo (Steam, Wine, lib32)"),
+    (Extra::Rice, "ParaPsychic rice (dotfiles, dwm)"),
+];
+
+/// "GRUB - can also boot..." -> "GRUB"
+pub fn short<T: PartialEq + Copy>(table: &[(T, &'static str)], value: T) -> &'static str {
+    let label = table.iter().find(|(v, _)| *v == value).map_or("", |(_, l)| *l);
+    label.split(" - ").next().unwrap_or(label)
+}
+
+fn index_of<T: PartialEq + Copy>(table: &[(T, &str)], value: T) -> usize {
+    table.iter().position(|(v, _)| *v == value).unwrap_or(0)
+}
+
+/// "" -> "/", "boot" -> "/boot"
+pub fn show_mount(key: &str) -> String {
+    format!("/{key}")
+}
+
+pub enum Action {
     None,
-
-    /* Filesystem */
-    Partitioning,
-    MountBoot,
-    MountHome,
-    MountRoot,
-    EraseEFI,
-    EraseHome,
-    MountExtraPartition,
-    MountExtraPartition__Insert,
-    ConfirmPartitions,
-
-    /* Essentials */
-    SetupSwap,
-    SelectTimezone,
-    SelectLocale,
-    SetupHostname,
-    SetupRootPassword,
-    SetupBootloader,
-    SetupSuperUserUtility,
-    SetupUser,
-
-    /* Installing */ 
-    ConfirmInstallation,
-    StartInstallation,
+    Quit,
+    Install,
+    /// Run cfdisk on this disk
+    Partition(String),
 }
 
-/// Stores the app state
+pub struct Field {
+    pub label: &'static str,
+    pub value: String,
+    pub secret: bool,
+}
+
+impl Field {
+    fn new(label: &'static str, value: &str, secret: bool) -> Field {
+        Field { label, value: value.to_string(), secret }
+    }
+}
+
+/// A form opened from a list step.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Sub {
+    /// Mount point for this partition
+    Mount(String),
+    NewUser { admin: bool },
+    Extra(Extra),
+}
+
 pub struct App<'a> {
-    /* App render state */
-    pub current_screen: Screens,
-    pub current_sub_screen: SubScreens,
-    pub list_selection: ListState,
-    pub error_console: String,
-    pub tab_selection: usize,
+    pub step: Step,
+    pub list: ListState,
+    pub filter: String,
+    pub form: Vec<Field>,
+    pub focus: usize,
+    pub sub: Option<Sub>,
+    pub error: Option<String>,
+    pub done: Vec<Step>,
+    /// Declarative --config-file preview: only the review, nothing to go back to
+    pub preview: bool,
+    /// Why the review can't install, from the same checks --config-file runs
+    pub problems: Vec<String>,
+    pub scroll: u16,
 
-    pub redraw_next_frame: bool,
-
-    /* Lists */
-    pub filesystem_drives_list: Rc<Vec<String>>,
-    pub filesystem_partitions_list: Rc<Vec<String>>,
-    pub reflector_countries: Rc<Vec<&'a str>>,
-    pub timezones: Rc<Vec<&'a str>>,
-    pub swap_sizes_list: Rc<Vec<usize>>,
-    pub locales_list: Rc<Vec<&'a str>>,
-    pub text_controller: String,
-
-    /* Selection and Method parameters */
-    pub selected_reflector_country: String,
-    pub selected_timezone: String,
-    pub selected_locale: String,
-    pub selected_encoding: String,
-    pub swap_size: usize,
-    pub username: String,
-    pub password: String,
-    pub root_password: String,
-    pub hostname: String,
-
-    /* Configuration state */
+    pub cfg: Config,
+    /// Mounts on existing partitions while picking them
     pub filesystem: Filesystem<'a>,
-    pub base_installer: BaseInstaller<'a>,
-    pub essentials: Essentials<'a>,
-    pub pacman: Pacman<'a>,
-
-    /* Progress */
-    pub filesystem_setup_complete: bool,
-    pub pacman_setup_complete: bool,
-    pub essentials_setup_complete: bool,
-    pub start_installation: bool,
+    pub sys: System,
+    logger: &'a Logger,
 }
 
 impl<'a> App<'a> {
-    pub fn new<'b>(logger: &'b Logger) -> App<'b> {
-        App {
-            current_screen: Screens::StartScreen,
-            current_sub_screen: SubScreens::None,
-            list_selection: ListState::default().with_selected(Some(0)),
-            tab_selection: 0,
-            text_controller: String::new(),
-            error_console: String::new(),
-            redraw_next_frame: false,
-            filesystem: Filesystem::new(&logger),
-            base_installer: BaseInstaller::new(&logger),
-            pacman: Pacman::new(&logger),
-            essentials: Essentials::new(&logger, Bootloader::Grub, SuperUserUtility::Sudo),
-            filesystem_drives_list: Rc::new(Vec::new()),
-            filesystem_partitions_list: Rc::new(Vec::new()),
-            filesystem_setup_complete: false,
-            pacman_setup_complete: false,
-            essentials_setup_complete: false,
+    pub fn new(logger: &'a Logger) -> App<'a> {
+        App::with_system(logger, System::probe(logger))
+    }
 
-            selected_reflector_country: String::new(),
-            selected_timezone: String::new(),
-            selected_locale: String::new(),
-            selected_encoding: String::new(),
-            swap_size: 16,
-            username: String::new(),
-            password: String::new(),
-            root_password: String::new(),
-            hostname: String::new(),
-            start_installation: false,
-
-            swap_sizes_list: Rc::new(vec![1, 2, 4, 8, 16, 32, 64]),
-            reflector_countries: Rc::new(vec![
-                "India",
-                "Australia",
-                "Austria",
-                "Azerbaijan",
-                "Bangladesh",
-                "Belarus",
-                "Belgium",
-                "Bosnia and Herzegovina",
-                "Brazil",
-                "Bulgaria",
-                "Cambodia",
-                "Canada",
-                "Chile",
-                "China",
-                "Colombia",
-                "Croatia",
-                "Czechia",
-                "Denmark",
-                "Ecuador",
-                "Estonia",
-                "Finland",
-                "France",
-                "Georgia",
-                "Germany",
-                "Greece",
-                "Hong Kong",
-                "Hungary",
-                "Iceland",
-                "India",
-                "Indonesia",
-                "Iran",
-                "Israel",
-                "Italy",
-                "Japan",
-                "Kazakhstan",
-                "Kenya",
-                "Latvia",
-                "Lithuania",
-                "Luxembourg",
-                "Mauritius",
-                "Mexico",
-                "Moldova",
-                "Monaco",
-                "Netherlands",
-                "New Caledonia",
-                "New Zealand",
-                "North Macedonia",
-                "Norway",
-                "Paraguay",
-                "Poland",
-                "Portugal",
-                "Romania",
-                "Russia",
-                "Réunion",
-                "Serbia",
-                "Singapore",
-                "Slovakia",
-                "Slovenia",
-                "South Africa",
-                "South Korea",
-                "Spain",
-                "Sweden",
-                "Switzerland",
-                "Taiwan",
-                "Thailand",
-                "Türkiye",
-                "Ukraine",
-                "United Kingdom",
-                "United States",
-                "Uzbekistan",
-                "Vietnam",
-            ]),
-            timezones: Rc::new(vec![
-                "Asia/Kolkata",
-                "Africa/Abidjan",
-                "Africa/Accra",
-                "Africa/Addis_Ababa",
-                "Africa/Algiers",
-                "Africa/Asmara",
-                "Africa/Asmera",
-                "Africa/Bamako",
-                "Africa/Bangui",
-                "Africa/Banjul",
-                "Africa/Bissau",
-                "Africa/Blantyre",
-                "Africa/Brazzaville",
-                "Africa/Bujumbura",
-                "Africa/Cairo",
-                "Africa/Casablanca",
-                "Africa/Ceuta",
-                "Africa/Conakry",
-                "Africa/Dakar",
-                "Africa/Dar_es_Salaam",
-                "Africa/Djibouti",
-                "Africa/Douala",
-                "Africa/El_Aaiun",
-                "Africa/Freetown",
-                "Africa/Gaborone",
-                "Africa/Harare",
-                "Africa/Johannesburg",
-                "Africa/Juba",
-                "Africa/Kampala",
-                "Africa/Khartoum",
-                "Africa/Kigali",
-                "Africa/Kinshasa",
-                "Africa/Lagos",
-                "Africa/Libreville",
-                "Africa/Lome",
-                "Africa/Luanda",
-                "Africa/Lubumbashi",
-                "Africa/Lusaka",
-                "Africa/Malabo",
-                "Africa/Maputo",
-                "Africa/Maseru",
-                "Africa/Mbabane",
-                "Africa/Mogadishu",
-                "Africa/Monrovia",
-                "Africa/Nairobi",
-                "Africa/Ndjamena",
-                "Africa/Niamey",
-                "Africa/Nouakchott",
-                "Africa/Ouagadougou",
-                "Africa/Porto-Novo",
-                "Africa/Sao_Tome",
-                "Africa/Timbuktu",
-                "Africa/Tripoli",
-                "Africa/Tunis",
-                "Africa/Windhoek",
-                "America/Adak",
-                "America/Anchorage",
-                "America/Anguilla",
-                "America/Antigua",
-                "America/Araguaina",
-                "America/Argentina/Buenos_Aires",
-                "America/Argentina/Catamarca",
-                "America/Argentina/ComodRivadavia",
-                "America/Argentina/Cordoba",
-                "America/Argentina/Jujuy",
-                "America/Argentina/La_Rioja",
-                "America/Argentina/Mendoza",
-                "America/Argentina/Rio_Gallegos",
-                "America/Argentina/Salta",
-                "America/Argentina/San_Juan",
-                "America/Argentina/San_Luis",
-                "America/Argentina/Tucuman",
-                "America/Argentina/Ushuaia",
-                "America/Aruba",
-                "America/Asuncion",
-                "America/Atikokan",
-                "America/Atka",
-                "America/Bahia",
-                "America/Bahia_Banderas",
-                "America/Barbados",
-                "America/Belem",
-                "America/Belize",
-                "America/Blanc-Sablon",
-                "America/Boa_Vista",
-                "America/Bogota",
-                "America/Boise",
-                "America/Buenos_Aires",
-                "America/Cambridge_Bay",
-                "America/Campo_Grande",
-                "America/Cancun",
-                "America/Caracas",
-                "America/Catamarca",
-                "America/Cayenne",
-                "America/Cayman",
-                "America/Chicago",
-                "America/Chihuahua",
-                "America/Ciudad_Juarez",
-                "America/Coral_Harbour",
-                "America/Cordoba",
-                "America/Costa_Rica",
-                "America/Creston",
-                "America/Cuiaba",
-                "America/Curacao",
-                "America/Danmarkshavn",
-                "America/Dawson",
-                "America/Dawson_Creek",
-                "America/Denver",
-                "America/Detroit",
-                "America/Dominica",
-                "America/Edmonton",
-                "America/Eirunepe",
-                "America/El_Salvador",
-                "America/Ensenada",
-                "America/Fort_Nelson",
-                "America/Fort_Wayne",
-                "America/Fortaleza",
-                "America/Glace_Bay",
-                "America/Godthab",
-                "America/Goose_Bay",
-                "America/Grand_Turk",
-                "America/Grenada",
-                "America/Guadeloupe",
-                "America/Guatemala",
-                "America/Guayaquil",
-                "America/Guyana",
-                "America/Halifax",
-                "America/Havana",
-                "America/Hermosillo",
-                "America/Indiana/Indianapolis",
-                "America/Indiana/Knox",
-                "America/Indiana/Marengo",
-                "America/Indiana/Petersburg",
-                "America/Indiana/Tell_City",
-                "America/Indiana/Vevay",
-                "America/Indiana/Vincennes",
-                "America/Indiana/Winamac",
-                "America/Indianapolis",
-                "America/Inuvik",
-                "America/Iqaluit",
-                "America/Jamaica",
-                "America/Jujuy",
-                "America/Juneau",
-                "America/Kentucky/Louisville",
-                "America/Kentucky/Monticello",
-                "America/Knox_IN",
-                "America/Kralendijk",
-                "America/La_Paz",
-                "America/Lima",
-                "America/Los_Angeles",
-                "America/Louisville",
-                "America/Lower_Princes",
-                "America/Maceio",
-                "America/Managua",
-                "America/Manaus",
-                "America/Marigot",
-                "America/Martinique",
-                "America/Matamoros",
-                "America/Mazatlan",
-                "America/Mendoza",
-                "America/Menominee",
-                "America/Merida",
-                "America/Metlakatla",
-                "America/Mexico_City",
-                "America/Miquelon",
-                "America/Moncton",
-                "America/Monterrey",
-                "America/Montevideo",
-                "America/Montreal",
-                "America/Montserrat",
-                "America/Nassau",
-                "America/New_York",
-                "America/Nipigon",
-                "America/Nome",
-                "America/Noronha",
-                "America/North_Dakota/Beulah",
-                "America/North_Dakota/Center",
-                "America/North_Dakota/New_Salem",
-                "America/Nuuk",
-                "America/Ojinaga",
-                "America/Panama",
-                "America/Pangnirtung",
-                "America/Paramaribo",
-                "America/Phoenix",
-                "America/Port-au-Prince",
-                "America/Port_of_Spain",
-                "America/Porto_Acre",
-                "America/Porto_Velho",
-                "America/Puerto_Rico",
-                "America/Punta_Arenas",
-                "America/Rainy_River",
-                "America/Rankin_Inlet",
-                "America/Recife",
-                "America/Regina",
-                "America/Resolute",
-                "America/Rio_Branco",
-                "America/Rosario",
-                "America/Santa_Isabel",
-                "America/Santarem",
-                "America/Santiago",
-                "America/Santo_Domingo",
-                "America/Sao_Paulo",
-                "America/Scoresbysund",
-                "America/Shiprock",
-                "America/Sitka",
-                "America/St_Barthelemy",
-                "America/St_Johns",
-                "America/St_Kitts",
-                "America/St_Lucia",
-                "America/St_Thomas",
-                "America/St_Vincent",
-                "America/Swift_Current",
-                "America/Tegucigalpa",
-                "America/Thule",
-                "America/Thunder_Bay",
-                "America/Tijuana",
-                "America/Toronto",
-                "America/Tortola",
-                "America/Vancouver",
-                "America/Virgin",
-                "America/Whitehorse",
-                "America/Winnipeg",
-                "America/Yakutat",
-                "America/Yellowknife",
-                "Antarctica/Casey",
-                "Antarctica/Davis",
-                "Antarctica/DumontDUrville",
-                "Antarctica/Macquarie",
-                "Antarctica/Mawson",
-                "Antarctica/McMurdo",
-                "Antarctica/Palmer",
-                "Antarctica/Rothera",
-                "Antarctica/South_Pole",
-                "Antarctica/Syowa",
-                "Antarctica/Troll",
-                "Antarctica/Vostok",
-                "Arctic/Longyearbyen",
-                "Asia/Aden",
-                "Asia/Almaty",
-                "Asia/Amman",
-                "Asia/Anadyr",
-                "Asia/Aqtau",
-                "Asia/Aqtobe",
-                "Asia/Ashgabat",
-                "Asia/Ashkhabad",
-                "Asia/Atyrau",
-                "Asia/Baghdad",
-                "Asia/Bahrain",
-                "Asia/Baku",
-                "Asia/Bangkok",
-                "Asia/Barnaul",
-                "Asia/Beirut",
-                "Asia/Bishkek",
-                "Asia/Brunei",
-                "Asia/Calcutta",
-                "Asia/Chita",
-                "Asia/Choibalsan",
-                "Asia/Chongqing",
-                "Asia/Chungking",
-                "Asia/Colombo",
-                "Asia/Dacca",
-                "Asia/Damascus",
-                "Asia/Dhaka",
-                "Asia/Dili",
-                "Asia/Dubai",
-                "Asia/Dushanbe",
-                "Asia/Famagusta",
-                "Asia/Gaza",
-                "Asia/Harbin",
-                "Asia/Hebron",
-                "Asia/Ho_Chi_Minh",
-                "Asia/Hong_Kong",
-                "Asia/Hovd",
-                "Asia/Irkutsk",
-                "Asia/Istanbul",
-                "Asia/Jakarta",
-                "Asia/Jayapura",
-                "Asia/Jerusalem",
-                "Asia/Kabul",
-                "Asia/Kamchatka",
-                "Asia/Karachi",
-                "Asia/Kashgar",
-                "Asia/Kathmandu",
-                "Asia/Katmandu",
-                "Asia/Khandyga",
-                "Asia/Kolkata",
-                "Asia/Krasnoyarsk",
-                "Asia/Kuala_Lumpur",
-                "Asia/Kuching",
-                "Asia/Kuwait",
-                "Asia/Macao",
-                "Asia/Macau",
-                "Asia/Magadan",
-                "Asia/Makassar",
-                "Asia/Manila",
-                "Asia/Muscat",
-                "Asia/Nicosia",
-                "Asia/Novokuznetsk",
-                "Asia/Novosibirsk",
-                "Asia/Omsk",
-                "Asia/Oral",
-                "Asia/Phnom_Penh",
-                "Asia/Pontianak",
-                "Asia/Pyongyang",
-                "Asia/Qatar",
-                "Asia/Qostanay",
-                "Asia/Qyzylorda",
-                "Asia/Rangoon",
-                "Asia/Riyadh",
-                "Asia/Saigon",
-                "Asia/Sakhalin",
-                "Asia/Samarkand",
-                "Asia/Seoul",
-                "Asia/Shanghai",
-                "Asia/Singapore",
-                "Asia/Srednekolymsk",
-                "Asia/Taipei",
-                "Asia/Tashkent",
-                "Asia/Tbilisi",
-                "Asia/Tehran",
-                "Asia/Tel_Aviv",
-                "Asia/Thimbu",
-                "Asia/Thimphu",
-                "Asia/Tokyo",
-                "Asia/Tomsk",
-                "Asia/Ujung_Pandang",
-                "Asia/Ulaanbaatar",
-                "Asia/Ulan_Bator",
-                "Asia/Urumqi",
-                "Asia/Ust-Nera",
-                "Asia/Vientiane",
-                "Asia/Vladivostok",
-                "Asia/Yakutsk",
-                "Asia/Yangon",
-                "Asia/Yekaterinburg",
-                "Asia/Yerevan",
-                "Atlantic/Azores",
-                "Atlantic/Bermuda",
-                "Atlantic/Canary",
-                "Atlantic/Cape_Verde",
-                "Atlantic/Faeroe",
-                "Atlantic/Faroe",
-                "Atlantic/Jan_Mayen",
-                "Atlantic/Madeira",
-                "Atlantic/Reykjavik",
-                "Atlantic/South_Georgia",
-                "Atlantic/St_Helena",
-                "Atlantic/Stanley",
-                "Australia/ACT",
-                "Australia/Adelaide",
-                "Australia/Brisbane",
-                "Australia/Broken_Hill",
-                "Australia/Canberra",
-                "Australia/Currie",
-                "Australia/Darwin",
-                "Australia/Eucla",
-                "Australia/Hobart",
-                "Australia/LHI",
-                "Australia/Lindeman",
-                "Australia/Lord_Howe",
-                "Australia/Melbourne",
-                "Australia/NSW",
-                "Australia/North",
-                "Australia/Perth",
-                "Australia/Queensland",
-                "Australia/South",
-                "Australia/Sydney",
-                "Australia/Tasmania",
-                "Australia/Victoria",
-                "Australia/West",
-                "Australia/Yancowinna",
-                "Brazil/Acre",
-                "Brazil/DeNoronha",
-                "Brazil/East",
-                "Brazil/West",
-                "CET",
-                "CST6CDT",
-                "Canada/Atlantic",
-                "Canada/Central",
-                "Canada/Eastern",
-                "Canada/Mountain",
-                "Canada/Newfoundland",
-                "Canada/Pacific",
-                "Canada/Saskatchewan",
-                "Canada/Yukon",
-                "Chile/Continental",
-                "Chile/EasterIsland",
-                "Cuba",
-                "EET",
-                "EST",
-                "EST5EDT",
-                "Egypt",
-                "Eire",
-                "Etc/GMT",
-                "Etc/GMT+0",
-                "Etc/GMT+1",
-                "Etc/GMT+10",
-                "Etc/GMT+11",
-                "Etc/GMT+12",
-                "Etc/GMT+2",
-                "Etc/GMT+3",
-                "Etc/GMT+4",
-                "Etc/GMT+5",
-                "Etc/GMT+6",
-                "Etc/GMT+7",
-                "Etc/GMT+8",
-                "Etc/GMT+9",
-                "Etc/GMT-0",
-                "Etc/GMT-1",
-                "Etc/GMT-10",
-                "Etc/GMT-11",
-                "Etc/GMT-12",
-                "Etc/GMT-13",
-                "Etc/GMT-14",
-                "Etc/GMT-2",
-                "Etc/GMT-3",
-                "Etc/GMT-4",
-                "Etc/GMT-5",
-                "Etc/GMT-6",
-                "Etc/GMT-7",
-                "Etc/GMT-8",
-                "Etc/GMT-9",
-                "Etc/GMT0",
-                "Etc/Greenwich",
-                "Etc/UCT",
-                "Etc/UTC",
-                "Etc/Universal",
-                "Etc/Zulu",
-                "Europe/Amsterdam",
-                "Europe/Andorra",
-                "Europe/Astrakhan",
-                "Europe/Athens",
-                "Europe/Belfast",
-                "Europe/Belgrade",
-                "Europe/Berlin",
-                "Europe/Bratislava",
-                "Europe/Brussels",
-                "Europe/Bucharest",
-                "Europe/Budapest",
-                "Europe/Busingen",
-                "Europe/Chisinau",
-                "Europe/Copenhagen",
-                "Europe/Dublin",
-                "Europe/Gibraltar",
-                "Europe/Guernsey",
-                "Europe/Helsinki",
-                "Europe/Isle_of_Man",
-                "Europe/Istanbul",
-                "Europe/Jersey",
-                "Europe/Kaliningrad",
-                "Europe/Kiev",
-                "Europe/Kirov",
-                "Europe/Kyiv",
-                "Europe/Lisbon",
-                "Europe/Ljubljana",
-                "Europe/London",
-                "Europe/Luxembourg",
-                "Europe/Madrid",
-                "Europe/Malta",
-                "Europe/Mariehamn",
-                "Europe/Minsk",
-                "Europe/Monaco",
-                "Europe/Moscow",
-                "Europe/Nicosia",
-                "Europe/Oslo",
-                "Europe/Paris",
-                "Europe/Podgorica",
-                "Europe/Prague",
-                "Europe/Riga",
-                "Europe/Rome",
-                "Europe/Samara",
-                "Europe/San_Marino",
-                "Europe/Sarajevo",
-                "Europe/Saratov",
-                "Europe/Simferopol",
-                "Europe/Skopje",
-                "Europe/Sofia",
-                "Europe/Stockholm",
-                "Europe/Tallinn",
-                "Europe/Tirane",
-                "Europe/Tiraspol",
-                "Europe/Ulyanovsk",
-                "Europe/Uzhgorod",
-                "Europe/Vaduz",
-                "Europe/Vatican",
-                "Europe/Vienna",
-                "Europe/Vilnius",
-                "Europe/Volgograd",
-                "Europe/Warsaw",
-                "Europe/Zagreb",
-                "Europe/Zaporozhye",
-                "Europe/Zurich",
-                "Factory",
-                "GB",
-                "GB-Eire",
-                "GMT",
-                "GMT+0",
-                "GMT-0",
-                "GMT0",
-                "Greenwich",
-                "HST",
-                "Hongkong",
-                "Iceland",
-                "Indian/Antananarivo",
-                "Indian/Chagos",
-                "Indian/Christmas",
-                "Indian/Cocos",
-                "Indian/Comoro",
-                "Indian/Kerguelen",
-                "Indian/Mahe",
-                "Indian/Maldives",
-                "Indian/Mauritius",
-                "Indian/Mayotte",
-                "Indian/Reunion",
-                "Iran",
-                "Israel",
-                "Jamaica",
-                "Japan",
-                "Kwajalein",
-                "Libya",
-                "MET",
-                "MST",
-                "MST7MDT",
-                "Mexico/BajaNorte",
-                "Mexico/BajaSur",
-                "Mexico/General",
-                "NZ",
-                "NZ-CHAT",
-                "Navajo",
-                "PRC",
-                "PST8PDT",
-                "Pacific/Apia",
-                "Pacific/Auckland",
-                "Pacific/Bougainville",
-                "Pacific/Chatham",
-                "Pacific/Chuuk",
-                "Pacific/Easter",
-                "Pacific/Efate",
-                "Pacific/Enderbury",
-                "Pacific/Fakaofo",
-                "Pacific/Fiji",
-                "Pacific/Funafuti",
-                "Pacific/Galapagos",
-                "Pacific/Gambier",
-                "Pacific/Guadalcanal",
-                "Pacific/Guam",
-                "Pacific/Honolulu",
-                "Pacific/Johnston",
-                "Pacific/Kanton",
-                "Pacific/Kiritimati",
-                "Pacific/Kosrae",
-                "Pacific/Kwajalein",
-                "Pacific/Majuro",
-                "Pacific/Marquesas",
-                "Pacific/Midway",
-                "Pacific/Nauru",
-                "Pacific/Niue",
-                "Pacific/Norfolk",
-                "Pacific/Noumea",
-                "Pacific/Pago_Pago",
-                "Pacific/Palau",
-                "Pacific/Pitcairn",
-                "Pacific/Pohnpei",
-                "Pacific/Ponape",
-                "Pacific/Port_Moresby",
-                "Pacific/Rarotonga",
-                "Pacific/Saipan",
-                "Pacific/Samoa",
-                "Pacific/Tahiti",
-                "Pacific/Tarawa",
-                "Pacific/Tongatapu",
-                "Pacific/Truk",
-                "Pacific/Wake",
-                "Pacific/Wallis",
-                "Pacific/Yap",
-                "Poland",
-                "Portugal",
-                "ROC",
-                "ROK",
-                "Singapore",
-                "Turkey",
-                "UCT",
-                "US/Alaska",
-                "US/Aleutian",
-                "US/Arizona",
-                "US/Central",
-                "US/East-Indiana",
-                "US/Eastern",
-                "US/Hawaii",
-                "US/Indiana-Starke",
-                "US/Michigan",
-                "US/Mountain",
-                "US/Pacific",
-                "US/Samoa",
-                "UTC",
-                "Universal",
-                "W-SU",
-                "WET",
-                "Zulu",
-            ]),
-            locales_list: Rc::new(vec![
-                "en_US.UTF-8 UTF-8",
-                "en_IN UTF-8",
-                "aa_DJ.UTF-8 UTF-8",
-                "aa_DJ ISO-8859-1",
-                "aa_ER UTF-8",
-                "aa_ER@saaho UTF-8",
-                "aa_ET UTF-8",
-                "af_ZA.UTF-8 UTF-8",
-                "af_ZA ISO-8859-1",
-                "agr_PE UTF-8",
-                "ak_GH UTF-8",
-                "am_ET UTF-8",
-                "an_ES.UTF-8 UTF-8",
-                "an_ES ISO-8859-15",
-                "anp_IN UTF-8",
-                "ar_AE.UTF-8 UTF-8",
-                "ar_AE ISO-8859-6",
-                "ar_BH.UTF-8 UTF-8",
-                "ar_BH ISO-8859-6",
-                "ar_DZ.UTF-8 UTF-8",
-                "ar_DZ ISO-8859-6",
-                "ar_EG.UTF-8 UTF-8",
-                "ar_EG ISO-8859-6",
-                "ar_IN UTF-8",
-                "ar_IQ.UTF-8 UTF-8",
-                "ar_IQ ISO-8859-6",
-                "ar_JO.UTF-8 UTF-8",
-                "ar_JO ISO-8859-6",
-                "ar_KW.UTF-8 UTF-8",
-                "ar_KW ISO-8859-6",
-                "ar_LB.UTF-8 UTF-8",
-                "ar_LB ISO-8859-6",
-                "ar_LY.UTF-8 UTF-8",
-                "ar_LY ISO-8859-6",
-                "ar_MA.UTF-8 UTF-8",
-                "ar_MA ISO-8859-6",
-                "ar_OM.UTF-8 UTF-8",
-                "ar_OM ISO-8859-6",
-                "ar_QA.UTF-8 UTF-8",
-                "ar_QA ISO-8859-6",
-                "ar_SA.UTF-8 UTF-8",
-                "ar_SA ISO-8859-6",
-                "ar_SD.UTF-8 UTF-8",
-                "ar_SD ISO-8859-6",
-                "ar_SS UTF-8",
-                "ar_SY.UTF-8 UTF-8",
-                "ar_SY ISO-8859-6",
-                "ar_TN.UTF-8 UTF-8",
-                "ar_TN ISO-8859-6",
-                "ar_YE.UTF-8 UTF-8",
-                "ar_YE ISO-8859-6",
-                "ayc_PE UTF-8",
-                "az_AZ UTF-8",
-                "az_IR UTF-8",
-                "as_IN UTF-8",
-                "ast_ES.UTF-8 UTF-8",
-                "ast_ES ISO-8859-15",
-                "be_BY.UTF-8 UTF-8",
-                "be_BY CP1251",
-                "be_BY@latin UTF-8",
-                "bem_ZM UTF-8",
-                "ber_DZ UTF-8",
-                "ber_MA UTF-8",
-                "bg_BG.UTF-8 UTF-8",
-                "bg_BG CP1251",
-                "bhb_IN.UTF-8 UTF-8",
-                "bho_IN UTF-8",
-                "bho_NP UTF-8",
-                "bi_VU UTF-8",
-                "bn_BD UTF-8",
-                "bn_IN UTF-8",
-                "bo_CN UTF-8",
-                "bo_IN UTF-8",
-                "br_FR.UTF-8 UTF-8",
-                "br_FR ISO-8859-1",
-                "br_FR@euro ISO-8859-15",
-                "brx_IN UTF-8",
-                "bs_BA.UTF-8 UTF-8",
-                "bs_BA ISO-8859-2",
-                "byn_ER UTF-8",
-                "ca_AD.UTF-8 UTF-8",
-                "ca_AD ISO-8859-15",
-                "ca_ES.UTF-8 UTF-8",
-                "ca_ES ISO-8859-1",
-                "ca_ES@euro ISO-8859-15",
-                "ca_ES@valencia UTF-8",
-                "ca_FR.UTF-8 UTF-8",
-                "ca_FR ISO-8859-15",
-                "ca_IT.UTF-8 UTF-8",
-                "ca_IT ISO-8859-15",
-                "ce_RU UTF-8",
-                "chr_US UTF-8",
-                "ckb_IQ UTF-8",
-                "cmn_TW UTF-8",
-                "crh_UA UTF-8",
-                "cs_CZ.UTF-8 UTF-8",
-                "cs_CZ ISO-8859-2",
-                "csb_PL UTF-8",
-                "cv_RU UTF-8",
-                "cy_GB.UTF-8 UTF-8",
-                "cy_GB ISO-8859-14",
-                "da_DK.UTF-8 UTF-8",
-                "da_DK ISO-8859-1",
-                "de_AT.UTF-8 UTF-8",
-                "de_AT ISO-8859-1",
-                "de_AT@euro ISO-8859-15",
-                "de_BE.UTF-8 UTF-8",
-                "de_BE ISO-8859-1",
-                "de_BE@euro ISO-8859-15",
-                "de_CH.UTF-8 UTF-8",
-                "de_CH ISO-8859-1",
-                "de_DE.UTF-8 UTF-8",
-                "de_DE ISO-8859-1",
-                "de_DE@euro ISO-8859-15",
-                "de_IT.UTF-8 UTF-8",
-                "de_IT ISO-8859-1",
-                "de_LI.UTF-8 UTF-8",
-                "de_LU.UTF-8 UTF-8",
-                "de_LU ISO-8859-1",
-                "de_LU@euro ISO-8859-15",
-                "doi_IN UTF-8",
-                "dsb_DE UTF-8",
-                "dv_MV UTF-8",
-                "dz_BT UTF-8",
-                "el_GR.UTF-8 UTF-8",
-                "el_GR ISO-8859-7",
-                "el_GR@euro ISO-8859-7",
-                "el_CY.UTF-8 UTF-8",
-                "el_CY ISO-8859-7",
-                "en_AG UTF-8",
-                "en_AU.UTF-8 UTF-8",
-                "en_AU ISO-8859-1",
-                "en_BW.UTF-8 UTF-8",
-                "en_BW ISO-8859-1",
-                "en_CA.UTF-8 UTF-8",
-                "en_CA ISO-8859-1",
-                "en_DK.UTF-8 UTF-8",
-                "en_DK ISO-8859-1",
-                "en_GB.UTF-8 UTF-8",
-                "en_GB ISO-8859-1",
-                "en_HK.UTF-8 UTF-8",
-                "en_HK ISO-8859-1",
-                "en_IE.UTF-8 UTF-8",
-                "en_IE ISO-8859-1",
-                "en_IE@euro ISO-8859-15",
-                "en_IL UTF-8",
-                "en_IN UTF-8",
-                "en_NG UTF-8",
-                "en_NZ.UTF-8 UTF-8",
-                "en_NZ ISO-8859-1",
-                "en_PH.UTF-8 UTF-8",
-                "en_PH ISO-8859-1",
-                "en_SC.UTF-8 UTF-8",
-                "en_SG.UTF-8 UTF-8",
-                "en_SG ISO-8859-1",
-                "en_US.UTF-8 UTF-8",
-                "en_US ISO-8859-1",
-                "en_ZA.UTF-8 UTF-8",
-                "en_ZA ISO-8859-1",
-                "en_ZM UTF-8",
-                "en_ZW.UTF-8 UTF-8",
-                "en_ZW ISO-8859-1",
-                "eo UTF-8",
-                "es_AR.UTF-8 UTF-8",
-                "es_AR ISO-8859-1",
-                "es_BO.UTF-8 UTF-8",
-                "es_BO ISO-8859-1",
-                "es_CL.UTF-8 UTF-8",
-                "es_CL ISO-8859-1",
-                "es_CO.UTF-8 UTF-8",
-                "es_CO ISO-8859-1",
-                "es_CR.UTF-8 UTF-8",
-                "es_CR ISO-8859-1",
-                "es_CU UTF-8",
-                "es_DO.UTF-8 UTF-8",
-                "es_DO ISO-8859-1",
-                "es_EC.UTF-8 UTF-8",
-                "es_EC ISO-8859-1",
-                "es_ES.UTF-8 UTF-8",
-                "es_ES ISO-8859-1",
-                "es_ES@euro ISO-8859-15",
-                "es_GT.UTF-8 UTF-8",
-                "es_GT ISO-8859-1",
-                "es_HN.UTF-8 UTF-8",
-                "es_HN ISO-8859-1",
-                "es_MX.UTF-8 UTF-8",
-                "es_MX ISO-8859-1",
-                "es_NI.UTF-8 UTF-8",
-                "es_NI ISO-8859-1",
-                "es_PA.UTF-8 UTF-8",
-                "es_PA ISO-8859-1",
-                "es_PE.UTF-8 UTF-8",
-                "es_PE ISO-8859-1",
-                "es_PR.UTF-8 UTF-8",
-                "es_PR ISO-8859-1",
-                "es_PY.UTF-8 UTF-8",
-                "es_PY ISO-8859-1",
-                "es_SV.UTF-8 UTF-8",
-                "es_SV ISO-8859-1",
-                "es_US.UTF-8 UTF-8",
-                "es_US ISO-8859-1",
-                "es_UY.UTF-8 UTF-8",
-                "es_UY ISO-8859-1",
-                "es_VE.UTF-8 UTF-8",
-                "es_VE ISO-8859-1",
-                "et_EE.UTF-8 UTF-8",
-                "et_EE ISO-8859-1",
-                "et_EE.ISO-8859-15 ISO-8859-15",
-                "eu_ES.UTF-8 UTF-8",
-                "eu_ES ISO-8859-1",
-                "eu_ES@euro ISO-8859-15",
-                "fa_IR UTF-8",
-                "ff_SN UTF-8",
-                "fi_FI.UTF-8 UTF-8",
-                "fi_FI ISO-8859-1",
-                "fi_FI@euro ISO-8859-15",
-                "fil_PH UTF-8",
-                "fo_FO.UTF-8 UTF-8",
-                "fo_FO ISO-8859-1",
-                "fr_BE.UTF-8 UTF-8",
-                "fr_BE ISO-8859-1",
-                "fr_BE@euro ISO-8859-15",
-                "fr_CA.UTF-8 UTF-8",
-                "fr_CA ISO-8859-1",
-                "fr_CH.UTF-8 UTF-8",
-                "fr_CH ISO-8859-1",
-                "fr_FR.UTF-8 UTF-8",
-                "fr_FR ISO-8859-1",
-                "fr_FR@euro ISO-8859-15",
-                "fr_LU.UTF-8 UTF-8",
-                "fr_LU ISO-8859-1",
-                "fr_LU@euro ISO-8859-15",
-                "fur_IT UTF-8",
-                "fy_NL UTF-8",
-                "fy_DE UTF-8",
-                "ga_IE.UTF-8 UTF-8",
-                "ga_IE ISO-8859-1",
-                "ga_IE@euro ISO-8859-15",
-                "gd_GB.UTF-8 UTF-8",
-                "gd_GB ISO-8859-15",
-                "gez_ER UTF-8",
-                "gez_ER@abegede UTF-8",
-                "gez_ET UTF-8",
-                "gez_ET@abegede UTF-8",
-                "gl_ES.UTF-8 UTF-8",
-                "gl_ES ISO-8859-1",
-                "gl_ES@euro ISO-8859-15",
-                "gu_IN UTF-8",
-                "gv_GB.UTF-8 UTF-8",
-                "gv_GB ISO-8859-1",
-                "ha_NG UTF-8",
-                "hak_TW UTF-8",
-                "he_IL.UTF-8 UTF-8",
-                "he_IL ISO-8859-8",
-                "hi_IN UTF-8",
-                "hif_FJ UTF-8",
-                "hne_IN UTF-8",
-                "hr_HR.UTF-8 UTF-8",
-                "hr_HR ISO-8859-2",
-                "hsb_DE ISO-8859-2",
-                "hsb_DE.UTF-8 UTF-8",
-                "ht_HT UTF-8",
-                "hu_HU.UTF-8 UTF-8",
-                "hu_HU ISO-8859-2",
-                "hy_AM UTF-8",
-                "hy_AM.ARMSCII-8 ARMSCII-8",
-                "ia_FR UTF-8",
-                "id_ID.UTF-8 UTF-8",
-                "id_ID ISO-8859-1",
-                "ig_NG UTF-8",
-                "ik_CA UTF-8",
-                "is_IS.UTF-8 UTF-8",
-                "is_IS ISO-8859-1",
-                "it_CH.UTF-8 UTF-8",
-                "it_CH ISO-8859-1",
-                "it_IT.UTF-8 UTF-8",
-                "it_IT ISO-8859-1",
-                "it_IT@euro ISO-8859-15",
-                "iu_CA UTF-8",
-                "ja_JP.EUC-JP EUC-JP",
-                "ja_JP.UTF-8 UTF-8",
-                "ka_GE.UTF-8 UTF-8",
-                "ka_GE GEORGIAN-PS",
-                "kab_DZ UTF-8",
-                "kk_KZ.UTF-8 UTF-8",
-                "kk_KZ PT154",
-                "kl_GL.UTF-8 UTF-8",
-                "kl_GL ISO-8859-1",
-                "km_KH UTF-8",
-                "kn_IN UTF-8",
-                "ko_KR.EUC-KR EUC-KR",
-                "ko_KR.UTF-8 UTF-8",
-                "kok_IN UTF-8",
-                "ks_IN UTF-8",
-                "ks_IN@devanagari UTF-8",
-                "ku_TR.UTF-8 UTF-8",
-                "ku_TR ISO-8859-9",
-                "kw_GB.UTF-8 UTF-8",
-                "kw_GB ISO-8859-1",
-                "ky_KG UTF-8",
-                "lb_LU UTF-8",
-                "lg_UG.UTF-8 UTF-8",
-                "lg_UG ISO-8859-10",
-                "li_BE UTF-8",
-                "li_NL UTF-8",
-                "lij_IT UTF-8",
-                "ln_CD UTF-8",
-                "lo_LA UTF-8",
-                "lt_LT.UTF-8 UTF-8",
-                "lt_LT ISO-8859-13",
-                "lv_LV.UTF-8 UTF-8",
-                "lv_LV ISO-8859-13",
-                "lzh_TW UTF-8",
-                "mag_IN UTF-8",
-                "mai_IN UTF-8",
-                "mai_NP UTF-8",
-                "mfe_MU UTF-8",
-                "mg_MG.UTF-8 UTF-8",
-                "mg_MG ISO-8859-15",
-                "mhr_RU UTF-8",
-                "mi_NZ.UTF-8 UTF-8",
-                "mi_NZ ISO-8859-13",
-                "miq_NI UTF-8",
-                "mjw_IN UTF-8",
-                "mk_MK.UTF-8 UTF-8",
-                "mk_MK ISO-8859-5",
-                "ml_IN UTF-8",
-                "mn_MN UTF-8",
-                "mni_IN UTF-8",
-                "mnw_MM UTF-8",
-                "mr_IN UTF-8",
-                "ms_MY.UTF-8 UTF-8",
-                "ms_MY ISO-8859-1",
-                "mt_MT.UTF-8 UTF-8",
-                "mt_MT ISO-8859-3",
-                "my_MM UTF-8",
-                "nan_TW UTF-8",
-                "nan_TW@latin UTF-8",
-                "nb_NO.UTF-8 UTF-8",
-                "nb_NO ISO-8859-1",
-                "nds_DE UTF-8",
-                "nds_NL UTF-8",
-                "ne_NP UTF-8",
-                "nhn_MX UTF-8",
-                "niu_NU UTF-8",
-                "niu_NZ UTF-8",
-                "nl_AW UTF-8",
-                "nl_BE.UTF-8 UTF-8",
-                "nl_BE ISO-8859-1",
-                "nl_BE@euro ISO-8859-15",
-                "nl_NL.UTF-8 UTF-8",
-                "nl_NL ISO-8859-1",
-                "nl_NL@euro ISO-8859-15",
-                "nn_NO.UTF-8 UTF-8",
-                "nn_NO ISO-8859-1",
-                "nr_ZA UTF-8",
-                "nso_ZA UTF-8",
-                "oc_FR.UTF-8 UTF-8",
-                "oc_FR ISO-8859-1",
-                "om_ET UTF-8",
-                "om_KE.UTF-8 UTF-8",
-                "om_KE ISO-8859-1",
-                "or_IN UTF-8",
-                "os_RU UTF-8",
-                "pa_IN UTF-8",
-                "pa_PK UTF-8",
-                "pap_AW UTF-8",
-                "pap_CW UTF-8",
-                "pl_PL.UTF-8 UTF-8",
-                "pl_PL ISO-8859-2",
-                "ps_AF UTF-8",
-                "pt_BR.UTF-8 UTF-8",
-                "pt_BR ISO-8859-1",
-                "pt_PT.UTF-8 UTF-8",
-                "pt_PT ISO-8859-1",
-                "pt_PT@euro ISO-8859-15",
-                "quz_PE UTF-8",
-                "raj_IN UTF-8",
-                "rif_MA UTF-8",
-                "ro_RO.UTF-8 UTF-8",
-                "ro_RO ISO-8859-2",
-                "ru_RU.KOI8-R KOI8-R",
-                "ru_RU.UTF-8 UTF-8",
-                "ru_RU ISO-8859-5",
-                "ru_UA.UTF-8 UTF-8",
-                "ru_UA KOI8-U",
-                "rw_RW UTF-8",
-                "sa_IN UTF-8",
-                "sah_RU UTF-8",
-                "sat_IN UTF-8",
-                "sc_IT UTF-8",
-                "sd_IN UTF-8",
-                "sd_IN@devanagari UTF-8",
-                "se_NO UTF-8",
-                "sgs_LT UTF-8",
-                "shn_MM UTF-8",
-                "shs_CA UTF-8",
-                "si_LK UTF-8",
-                "sid_ET UTF-8",
-                "sk_SK.UTF-8 UTF-8",
-                "sk_SK ISO-8859-2",
-                "sl_SI.UTF-8 UTF-8",
-                "sl_SI ISO-8859-2",
-                "sm_WS UTF-8",
-                "so_DJ.UTF-8 UTF-8",
-                "so_DJ ISO-8859-1",
-                "so_ET UTF-8",
-                "so_KE.UTF-8 UTF-8",
-                "so_KE ISO-8859-1",
-                "so_SO.UTF-8 UTF-8",
-                "so_SO ISO-8859-1",
-                "sq_AL.UTF-8 UTF-8",
-                "sq_AL ISO-8859-1",
-                "sq_MK UTF-8",
-                "sr_ME UTF-8",
-                "sr_RS UTF-8",
-                "sr_RS@latin UTF-8",
-                "ss_ZA UTF-8",
-                "st_ZA.UTF-8 UTF-8",
-                "st_ZA ISO-8859-1",
-                "sv_FI.UTF-8 UTF-8",
-                "sv_FI ISO-8859-1",
-                "sv_FI@euro ISO-8859-15",
-                "sv_SE.UTF-8 UTF-8",
-                "sv_SE ISO-8859-1",
-                "sw_KE UTF-8",
-                "sw_TZ UTF-8",
-                "syr UTF-8",
-                "szl_PL UTF-8",
-                "ta_IN UTF-8",
-                "ta_LK UTF-8",
-                "tcy_IN.UTF-8 UTF-8",
-                "te_IN UTF-8",
-                "tg_TJ.UTF-8 UTF-8",
-                "tg_TJ KOI8-T",
-                "th_TH.UTF-8 UTF-8",
-                "th_TH TIS-620",
-                "the_NP UTF-8",
-                "ti_ER UTF-8",
-                "ti_ET UTF-8",
-                "tig_ER UTF-8",
-                "tk_TM UTF-8",
-                "tl_PH.UTF-8 UTF-8",
-                "tl_PH ISO-8859-1",
-                "tn_ZA UTF-8",
-                "to_TO UTF-8",
-                "tpi_PG UTF-8",
-                "tr_CY.UTF-8 UTF-8",
-                "tr_CY ISO-8859-9",
-                "tr_TR.UTF-8 UTF-8",
-                "tr_TR ISO-8859-9",
-                "ts_ZA UTF-8",
-                "tt_RU UTF-8",
-                "tt_RU@iqtelif UTF-8",
-                "ug_CN UTF-8",
-                "uk_UA.UTF-8 UTF-8",
-                "uk_UA KOI8-U",
-                "unm_US UTF-8",
-                "ur_IN UTF-8",
-                "ur_PK UTF-8",
-                "uz_UZ.UTF-8 UTF-8",
-                "uz_UZ ISO-8859-1",
-                "uz_UZ@cyrillic UTF-8",
-                "ve_ZA UTF-8",
-                "vi_VN UTF-8",
-                "wa_BE ISO-8859-1",
-                "wa_BE@euro ISO-8859-15",
-                "wa_BE.UTF-8 UTF-8",
-                "wae_CH UTF-8",
-                "wal_ET UTF-8",
-                "wo_SN UTF-8",
-                "xh_ZA.UTF-8 UTF-8",
-                "xh_ZA ISO-8859-1",
-                "yi_US.UTF-8 UTF-8",
-                "yi_US CP1255",
-                "yo_NG UTF-8",
-                "yue_HK UTF-8",
-                "yuw_PG UTF-8",
-                "zh_CN.GB18030 GB18030",
-                "zh_CN.GBK GBK",
-                "zh_CN.UTF-8 UTF-8",
-                "zh_CN GB2312",
-                "zh_HK.UTF-8 UTF-8",
-                "zh_HK BIG5-HKSCS",
-                "zh_SG.UTF-8 UTF-8",
-                "zh_SG.GBK GBK",
-                "zh_SG GB2312",
-                "zh_TW.EUC-TW EUC-TW",
-                "zh_TW.UTF-8 UTF-8",
-                "zh_TW BIG5",
-                "zu_ZA.UTF-8 UTF-8",
-                "zu_ZA ISO-8859-1",
-            ]),
+    pub fn with_system(logger: &'a Logger, sys: System) -> App<'a> {
+        let mut cfg = Config { desktop: Desktop::Dwm, ..Default::default() };
+        let mut drivers = vec![];
+        if let Some(nvidia) = sys.gpus.iter().find(|g| g.vendor == GpuVendor::Nvidia) {
+            drivers.push(nvidia_driver_for(nvidia.device));
         }
+        if sys.has_gpu(GpuVendor::Amd) {
+            drivers.push(GpuDriver::Amd);
+        }
+        if !drivers.is_empty() {
+            cfg.hardware.gpu = GpuChoice::List(drivers);
+        }
+        let mut app = App {
+            step: Step::Partition,
+            list: ListState::default(),
+            filter: String::new(),
+            form: vec![],
+            focus: 0,
+            sub: None,
+            error: None,
+            done: vec![],
+            preview: false,
+            problems: vec![],
+            scroll: 0,
+            cfg,
+            filesystem: Filesystem::new(logger),
+            sys,
+            logger,
+        };
+        app.enter(Step::Partition);
+        app
+    }
+
+    /// The review screen for a --config-file, before installing it.
+    pub fn preview(logger: &'a Logger, sys: System, cfg: Config) -> App<'a> {
+        let mut app = App::with_system(logger, sys);
+        app.cfg = cfg;
+        app.preview = true;
+        app.step = Step::Review;
+        app
+    }
+
+    /// Re-reads disks, e.g. after cfdisk. Forgets mounts whose partition vanished.
+    pub fn refresh_devices(&mut self) {
+        match lsblk(&mut Shell::new("TUI", self.logger)) {
+            Ok(devices) => self.sys.devices = devices,
+            Err(e) => self.error = Some(format!("lsblk failed: {e}")),
+        }
+        let paths: Vec<String> = self.sys.devices.iter().map(|d| d.path.clone()).collect();
+        self.filesystem.partitions.retain(|_, p| paths.contains(p));
+        self.sync_storage();
+    }
+
+    pub fn partitions(&self) -> Vec<&BlockDevice> {
+        self.sys.partitions()
+    }
+
+    pub fn mount_of(&self, partition: &str) -> Option<&str> {
+        self.filesystem.partitions.iter().find(|(_, p)| *p == partition).map(|(m, _)| m.as_str())
+    }
+
+    fn auto_partitioning(&self) -> bool {
+        !self.cfg.storage.partitioning.is_empty()
+    }
+
+    /// cfg.storage from the wizard's picks.
+    fn sync_storage(&mut self) {
+        let fs = &self.filesystem;
+        let storage = &mut self.cfg.storage;
+        let choice = |format: bool| if format { FormatChoice::Format } else { FormatChoice::Keep };
+        if storage.partitioning.is_empty() {
+            storage.efi.partition = fs.get("boot").cloned().unwrap_or("auto".into());
+            storage.efi.format = choice(fs.format_boot);
+            storage.root = fs.get("/").map(|p| Root { partition: p.clone() });
+            storage.home = fs.get("home").map(|p| Home { partition: p.clone(), format: choice(fs.format_home) });
+        } else {
+            storage.efi = Default::default();
+            storage.root = None;
+            storage.home = None;
+        }
+        storage.other = fs
+            .partitions
+            .iter()
+            .filter(|(m, _)| !["", "boot", "home"].contains(&m.as_str()))
+            .map(|(m, p)| OtherMount { partition: p.clone(), mountpoint: show_mount(m) })
+            .collect();
+    }
+
+    pub fn skipped(&self, step: Step) -> bool {
+        match step {
+            Step::Boot | Step::FormatBoot | Step::Root | Step::Home => self.auto_partitioning(),
+            Step::FormatHome => self.auto_partitioning() || self.filesystem.get("home").is_none(),
+            Step::Nvidia => !self.sys.has_gpu(GpuVendor::Nvidia),
+            Step::Amd => !self.sys.has_gpu(GpuVendor::Amd),
+            Step::Wifi => self.sys.wireless.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn is_form(&self) -> bool {
+        matches!(self.step, Step::Accounts | Step::Wifi | Step::Packages) || self.sub.is_some()
+    }
+
+    pub fn filterable(&self) -> bool {
+        matches!(self.step, Step::Mirrors | Step::Timezone | Step::Locale)
+    }
+
+    pub fn extra_on(&self, extra: Extra) -> bool {
+        match extra {
+            Extra::Ssh => self.cfg.ssh().is_some(),
+            Extra::Tailscale => self.cfg.tailscale().is_some(),
+            Extra::Vnc => self.cfg.vnc().is_some(),
+            Extra::Docker => self.cfg.docker.is_some(),
+            Extra::Multilib => self.cfg.packages.multilib,
+            Extra::Rice => self.cfg.parapsychic_mode == ParaMode::Enabled(true),
+        }
+    }
+
+    fn gpu(&self, nvidia: bool) -> Option<GpuDriver> {
+        match &self.cfg.hardware.gpu {
+            GpuChoice::List(list) => list.iter().copied().find(|d| d.is_nvidia() == nvidia),
+            _ => None,
+        }
+    }
+
+    fn set_gpu(&mut self, driver: GpuDriver) {
+        let mut list: Vec<GpuDriver> = match &self.cfg.hardware.gpu {
+            GpuChoice::List(list) => list.iter().copied().filter(|d| d.is_nvidia() != driver.is_nvidia()).collect(),
+            _ => vec![],
+        };
+        list.push(driver);
+        self.cfg.hardware.gpu = GpuChoice::List(list);
+    }
+
+    /// Every option of the current list step, unfiltered.
+    pub fn options(&self) -> Vec<String> {
+        let labels = |t: &[&str]| t.iter().map(|s| s.to_string()).collect();
+        let table = |t: &[&str]| -> Vec<String> { t.iter().map(|s| s.to_string()).collect() };
+        let partitions = |first: Option<&str>| {
+            first
+                .map(String::from)
+                .into_iter()
+                .chain(self.partitions().iter().map(|p| match self.mount_of(&p.path) {
+                    Some(m) => format!("{}  → {}", p.describe(), show_mount(m)),
+                    None => p.describe(),
+                }))
+                .collect()
+        };
+        match self.step {
+            Step::Partition => {
+                let mut options = vec!["Use the partitions as they are, continue".to_string()];
+                for disk in self.sys.disks() {
+                    let d = disk.describe();
+                    options.push(format!("Erase {d}"));
+                    options.push(format!("Use free space on {d}"));
+                    options.push(format!("Edit {d} in cfdisk"));
+                }
+                options
+            }
+            Step::Boot | Step::Root => partitions(None),
+            Step::Home => partitions(Some("No separate /home partition")),
+            Step::ExtraMounts => partitions(Some("Done, continue")),
+            Step::FormatBoot => labels(&["No - keep it (other OSes' bootloaders live here)", "Yes - format as FAT32, erasing everything on it"]),
+            Step::FormatHome => labels(&["No - keep the existing files", "Yes - format as ext4, erasing everything on it"]),
+            Step::Swap => SWAP_SIZES.iter().map(|s| s.map_or("No swap".to_string(), |gb| format!("{gb} GB"))).collect(),
+            Step::Mirrors => std::iter::once("Automatic - keep the list the ISO ranked at boot".to_string()).chain(table(&MIRROR_COUNTRIES)).collect(),
+            Step::Timezone => self.sys.timezones.clone(),
+            Step::Locale => self.sys.locales.clone(),
+            Step::Shell => SHELLS.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::MoreUsers => {
+                let mut options = labels(&["Done, continue", "Add a user", "Add an admin user"]);
+                for (i, user) in self.cfg.users.iter().enumerate().skip(1) {
+                    options.push(format!("{}{} - remove", user.name, if self.cfg.is_admin(i) { " (admin)" } else { "" }));
+                }
+                options
+            }
+            Step::Bootloader => BOOTLOADERS.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Privilege => PRIVILEGE.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Nvidia => NVIDIA.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Amd => AMD.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Desktop => DESKTOPS.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Autologin => std::iter::once("No - show the login screen".to_string()).chain(self.cfg.users.iter().map(|u| u.name.clone())).collect(),
+            Step::Browser => BROWSERS.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Extras => std::iter::once("Done, continue".to_string())
+                .chain(EXTRAS.iter().map(|(e, l)| format!("[{}] {l}", if self.extra_on(*e) { "x" } else { " " })))
+                .collect(),
+            Step::Finish => FINISH.iter().map(|(_, l)| l.to_string()).collect(),
+            Step::Accounts | Step::Wifi | Step::Packages | Step::Review => vec![],
+        }
+    }
+
+    /// Indices into options() matching the filter.
+    pub fn visible(&self) -> Vec<usize> {
+        let filter = self.filter.to_lowercase();
+        self.options().iter().enumerate().filter(|(_, o)| o.to_lowercase().contains(&filter)).map(|(i, _)| i).collect()
+    }
+
+    fn partition_index(&self, offset: usize, partition: Option<&String>) -> Option<usize> {
+        let i = self.partitions().iter().position(|p| Some(&p.path) == partition)?;
+        Some(i + offset)
+    }
+
+    /// Whether `mount_point`'s partition has no filesystem yet.
+    fn unformatted(&self, mount_point: &str) -> bool {
+        let p = self.filesystem.get(mount_point);
+        self.sys.devices.iter().any(|d| Some(&d.path) == p && d.fstype.is_none())
+    }
+
+    fn enter(&mut self, step: Step) {
+        self.step = step;
+        self.filter.clear();
+        self.sub = None;
+        self.scroll = 0;
+        let c = &self.cfg;
+        let main = c.users.first().cloned().unwrap_or_default();
+        let selected = match step {
+            Step::Boot => self
+                .partition_index(0, self.filesystem.get("boot"))
+                .or_else(|| self.partitions().iter().position(|p| p.parttypename.as_deref() == Some("EFI System"))),
+            Step::Root => self.partition_index(0, self.filesystem.get("/")),
+            Step::Home => self.partition_index(1, self.filesystem.get("home")),
+            Step::FormatBoot if self.done.contains(&step) => Some(self.filesystem.format_boot as usize),
+            Step::FormatBoot => Some(self.unformatted("boot") as usize),
+            Step::FormatHome if self.done.contains(&step) => Some(self.filesystem.format_home as usize),
+            Step::FormatHome => Some(self.unformatted("home") as usize),
+            Step::Swap => SWAP_SIZES.iter().position(|s| *s == c.storage.swap.0),
+            Step::Mirrors => MIRROR_COUNTRIES.iter().position(|m| *m == c.mirrors).map(|i| i + 1),
+            Step::Timezone => self.sys.timezones.iter().position(|t| *t == c.timezone),
+            Step::Locale => self.sys.locales.iter().position(|l| l.split(' ').next() == Some(&c.locale)),
+            Step::Shell => Some(index_of(&SHELLS, main.shell)),
+            Step::Bootloader => Some(index_of(&BOOTLOADERS, c.bootloader)),
+            Step::Privilege => Some(index_of(&PRIVILEGE, c.admin_tool)),
+            Step::Nvidia => self.gpu(true).map(|d| index_of(&NVIDIA, d)),
+            Step::Amd => self.gpu(false).map(|d| index_of(&AMD, d)),
+            Step::Desktop => Some(index_of(&DESKTOPS, c.desktop)),
+            Step::Autologin => c.autologin.as_ref().and_then(|a| c.users.iter().position(|u| &u.name == a)).map(|i| i + 1),
+            Step::Browser => Some(index_of(&BROWSERS, c.browser())),
+            Step::Finish => Some(index_of(&FINISH, c.finish)),
+            Step::Accounts => {
+                let root = c.root_password.clone().unwrap_or_default();
+                let password = main.password.clone().unwrap_or_default();
+                self.form = vec![
+                    Field::new("Hostname", &c.hostname, false),
+                    Field::new("Username", &main.name, false),
+                    Field::new("Full name (optional)", main.full_name.as_deref().unwrap_or_default(), false),
+                    Field::new("Password", &password, true),
+                    Field::new("Confirm password", &password, true),
+                    Field::new("Root password (optional)", &root, true),
+                    Field::new("Confirm root password", &root, true),
+                ];
+                self.focus = 0;
+                None
+            }
+            Step::Wifi => {
+                let wifi = c.network.connections.first();
+                self.form = vec![
+                    Field::new("Network name (SSID)", wifi.and_then(|w| w.ssid.as_deref()).unwrap_or_default(), false),
+                    Field::new("Password", wifi.and_then(|w| w.password.as_deref()).unwrap_or_default(), true),
+                ];
+                self.focus = 0;
+                None
+            }
+            Step::Packages => {
+                self.form = vec![
+                    Field::new("pacman packages", &c.packages.pacman.join(" "), false),
+                    Field::new("AUR packages", &c.packages.aur.join(" "), false),
+                ];
+                self.focus = 0;
+                None
+            }
+            Step::Review => {
+                self.sync_storage();
+                self.problems = validate::system_errors(&self.cfg, &self.sys, &installer::source::Source::Dir(".".into()));
+                self.problems.extend(validate::schema_errors(&serde_json::to_value(&self.cfg).unwrap_or_default()));
+                None
+            }
+            _ => None,
+        };
+        self.list.select(Some(selected.unwrap_or(0)));
+    }
+
+    fn go(&mut self, forward: bool) -> Action {
+        let i = STEPS.iter().position(|s| *s == self.step).unwrap_or(0);
+        let next = if forward { STEPS[i + 1..].iter().find(|s| !self.skipped(**s)) } else { STEPS[..i].iter().rev().find(|s| !self.skipped(**s)) };
+        match next {
+            Some(&s) => {
+                self.enter(s);
+                Action::None
+            }
+            None if forward => Action::None,
+            None => Action::Quit,
+        }
+    }
+
+    fn finish_step(&mut self) -> Action {
+        if !self.done.contains(&self.step) {
+            self.done.push(self.step);
+        }
+        self.sync_storage();
+        self.go(true)
+    }
+
+    pub fn on_key(&mut self, key: KeyEvent) -> Action {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Action::Quit;
+        }
+        self.error = None;
+        let result = if self.is_form() {
+            self.form_key(key)
+        } else if self.step == Step::Review {
+            self.review_key(key)
+        } else {
+            self.list_key(key)
+        };
+        result.unwrap_or_else(|e| {
+            self.error = Some(e.to_string());
+            Action::None
+        })
+    }
+
+    fn review_key(&mut self, key: KeyEvent) -> Result<Action> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if !self.problems.is_empty() {
+                    bail!("Fix the problems listed first.");
+                }
+                Ok(Action::Install)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll = self.scroll.saturating_sub(1);
+                Ok(Action::None)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll += 1;
+                Ok(Action::None)
+            }
+            KeyCode::PageUp => {
+                self.scroll = self.scroll.saturating_sub(10);
+                Ok(Action::None)
+            }
+            KeyCode::PageDown => {
+                self.scroll += 10;
+                Ok(Action::None)
+            }
+            KeyCode::Esc | KeyCode::Char('q') if self.preview => Ok(Action::Quit),
+            KeyCode::Esc => Ok(self.go(false)),
+            _ => bail!("Press y to install, esc to {}.", if self.preview { "quit" } else { "go back" }),
+        }
+    }
+
+    fn list_key(&mut self, key: KeyEvent) -> Result<Action> {
+        let visible = self.visible();
+        let n = visible.len();
+        let filterable = self.filterable();
+        let at = self.list.selected().unwrap_or(0);
+        let wrap = |d: isize| ((at as isize + d).rem_euclid(n.max(1) as isize)) as usize;
+        let clamp = |d: isize| (at as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
+
+        match key.code {
+            KeyCode::Up => self.list.select(Some(wrap(-1))),
+            KeyCode::Down => self.list.select(Some(wrap(1))),
+            KeyCode::Char('k') if !filterable => self.list.select(Some(wrap(-1))),
+            KeyCode::Char('j') if !filterable => self.list.select(Some(wrap(1))),
+            KeyCode::PageUp => self.list.select(Some(clamp(-10))),
+            KeyCode::PageDown => self.list.select(Some(clamp(10))),
+            KeyCode::Home => self.list.select(Some(0)),
+            KeyCode::End => self.list.select(Some(n.saturating_sub(1))),
+            KeyCode::Char(c) if filterable => {
+                self.filter.push(c);
+                self.list.select(Some(0));
+            }
+            KeyCode::Backspace if filterable => {
+                self.filter.pop();
+                self.list.select(Some(0));
+            }
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.list.select(Some(0));
+            }
+            KeyCode::Esc => return Ok(self.go(false)),
+            KeyCode::Enter => {
+                if let Some(&i) = visible.get(at) {
+                    return self.choose(i);
+                }
+            }
+            _ => {}
+        }
+        Ok(Action::None)
+    }
+
+    fn open(&mut self, sub: Sub, fields: Vec<Field>) -> Action {
+        self.form = fields;
+        self.focus = 0;
+        self.sub = Some(sub);
+        Action::None
+    }
+
+    /// The user picked option `i` (index into options()).
+    fn choose(&mut self, i: usize) -> Result<Action> {
+        let partition = |offset: usize| self.partitions().get(i.wrapping_sub(offset)).map(|p| p.path.clone());
+        match self.step {
+            Step::Partition if i == 0 => self.cfg.storage.partitioning.clear(),
+            Step::Partition => {
+                let disk = self.sys.disks()[(i - 1) / 3].path.clone();
+                match (i - 1) % 3 {
+                    2 => return Ok(Action::Partition(disk)),
+                    action => {
+                        self.cfg.storage.partitioning = vec![DiskPlan { disk, wipe: action == 0, add: default_layout() }];
+                        for mount in ["", "boot", "home"] {
+                            self.filesystem.set(mount, None)?;
+                        }
+                    }
+                }
+            }
+            Step::Boot => self.filesystem.set("boot", partition(0).as_deref())?,
+            Step::Root => self.filesystem.set("/", partition(0).as_deref())?,
+            Step::Home => self.filesystem.set("home", partition(1).as_deref())?,
+            Step::FormatBoot => self.filesystem.format_boot = i == 1,
+            Step::FormatHome => self.filesystem.format_home = i == 1,
+            Step::ExtraMounts if i > 0 => {
+                let partition = partition(1).unwrap_or_default();
+                match self.mount_of(&partition).map(String::from) {
+                    Some(m) if ["", "boot", "home"].contains(&m.as_str()) => {
+                        bail!("{partition} is your {} partition, change it in that step.", show_mount(&m))
+                    }
+                    Some(m) => {
+                        self.filesystem.set(&m, None)?;
+                        self.sync_storage();
+                    }
+                    None => return Ok(self.open(Sub::Mount(partition), vec![Field::new("Mount point", "/", false)])),
+                }
+                return Ok(Action::None);
+            }
+            Step::ExtraMounts => {}
+            Step::Swap => self.cfg.storage.swap = Swap(SWAP_SIZES[i]),
+            Step::Mirrors => self.cfg.mirrors = if i == 0 { "auto".into() } else { MIRROR_COUNTRIES[i - 1].to_string() },
+            Step::Timezone => self.cfg.timezone = self.sys.timezones[i].clone(),
+            Step::Locale => self.cfg.locale = self.sys.locales[i].split(' ').next().unwrap_or_default().to_string(),
+            Step::Shell => self.cfg.users[0].shell = SHELLS[i].0,
+            Step::MoreUsers if i == 1 || i == 2 => {
+                let fields = vec![Field::new("Username", "", false), Field::new("Password", "", true), Field::new("Confirm password", "", true)];
+                return Ok(self.open(Sub::NewUser { admin: i == 2 }, fields));
+            }
+            Step::MoreUsers if i > 2 => {
+                let removed = self.cfg.users.remove(i - 2);
+                if self.cfg.autologin.as_ref() == Some(&removed.name) {
+                    self.cfg.autologin = None;
+                }
+                self.list.select(Some(0));
+                return Ok(Action::None);
+            }
+            Step::MoreUsers => {}
+            Step::Bootloader => self.cfg.bootloader = BOOTLOADERS[i].0,
+            Step::Privilege => self.cfg.admin_tool = PRIVILEGE[i].0,
+            Step::Nvidia => self.set_gpu(NVIDIA[i].0),
+            Step::Amd => self.set_gpu(AMD[i].0),
+            Step::Desktop => {
+                self.cfg.desktop = DESKTOPS[i].0;
+                if self.cfg.desktop == Desktop::None {
+                    self.cfg.remote.vnc = None;
+                }
+            }
+            Step::Autologin => self.cfg.autologin = (i > 0).then(|| self.cfg.users[i - 1].name.clone()),
+            Step::Browser => self.cfg.browser = Some(BROWSERS[i].0),
+            Step::Extras if i > 0 => return self.toggle(EXTRAS[i - 1].0),
+            Step::Extras => {}
+            Step::Finish => self.cfg.finish = FINISH[i].0,
+            Step::Accounts | Step::Wifi | Step::Packages | Step::Review => {}
+        }
+        Ok(self.finish_step())
+    }
+
+    fn toggle(&mut self, extra: Extra) -> Result<Action> {
+        let on = self.extra_on(extra);
+        let c = &mut self.cfg;
+        match (extra, on) {
+            (Extra::Ssh, false) => return Ok(self.open(Sub::Extra(extra), vec![Field::new("Port", "22", false), Field::new("GitHub user for keys (optional)", "", false)])),
+            (Extra::Tailscale, false) => return Ok(self.open(Sub::Extra(extra), vec![Field::new("Auth key (optional)", "", true)])),
+            (Extra::Vnc, false) if c.desktop == Desktop::None => bail!("VNC needs a desktop to show."),
+            (Extra::Vnc, false) => return Ok(self.open(Sub::Extra(extra), vec![Field::new("VNC password", "", true), Field::new("Confirm password", "", true)])),
+            (Extra::Ssh, true) => c.remote.ssh = None,
+            (Extra::Tailscale, true) => c.remote.tailscale = None,
+            (Extra::Vnc, true) => c.remote.vnc = None,
+            (Extra::Docker, on) => c.docker = (!on).then(Docker::default),
+            (Extra::Multilib, on) => c.packages.multilib = !on,
+            (Extra::Rice, on) => c.parapsychic_mode = ParaMode::Enabled(!on),
+        }
+        Ok(Action::None)
+    }
+
+    fn form_key(&mut self, key: KeyEvent) -> Result<Action> {
+        let last = self.form.len() - 1;
+        match key.code {
+            KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1).min(last),
+            KeyCode::BackTab | KeyCode::Up => self.focus = self.focus.saturating_sub(1),
+            KeyCode::Char(c) => self.form[self.focus].value.push(c),
+            KeyCode::Backspace => {
+                self.form[self.focus].value.pop();
+            }
+            KeyCode::Enter if self.focus < last => self.focus += 1,
+            KeyCode::Enter => return self.submit_form(),
+            KeyCode::Esc if self.sub.is_some() => self.sub = None,
+            KeyCode::Esc => return Ok(self.go(false)),
+            _ => {}
+        }
+        Ok(Action::None)
+    }
+
+    /// Fails with the first rule that doesn't hold, focusing its field.
+    fn check(&mut self, rules: &[(usize, bool, &str)]) -> Result<()> {
+        if let Some((field, _, msg)) = rules.iter().find(|r| !r.1) {
+            self.focus = *field;
+            bail!(msg.to_string());
+        }
+        Ok(())
+    }
+
+    fn submit_form(&mut self) -> Result<Action> {
+        let v: Vec<String> = self.form.iter().map(|f| f.value.trim().to_string()).collect();
+        match self.sub.clone() {
+            Some(Sub::Mount(partition)) => {
+                let mount_point = v[0].trim_matches('/').to_string();
+                if !is_valid_mount_point(&mount_point) || ["boot", "home"].contains(&mount_point.as_str()) {
+                    bail!("Pick a path like /data or /mnt/windows (letters, digits, - _ .).");
+                }
+                self.filesystem.set(&mount_point, Some(&partition))?;
+                self.sync_storage();
+            }
+            Some(Sub::NewUser { admin }) => {
+                let taken = self.cfg.users.iter().any(|u| u.name == v[0]);
+                self.check(&[
+                    (0, valid_username(&v[0]), "Username: lowercase letters, digits, - and _, starting with a letter."),
+                    (0, !taken, "That user already exists."),
+                    (1, !v[1].is_empty(), "Password can't be empty."),
+                    (2, v[1] == v[2], "Passwords don't match."),
+                ])?;
+                self.cfg.users.push(User { name: v[0].clone(), password: Some(v[1].clone()), admin: Some(admin), ..Default::default() });
+            }
+            Some(Sub::Extra(Extra::Ssh)) => {
+                let port = v[0].parse::<u16>().unwrap_or(0);
+                self.check(&[(0, port > 0, "Port: a number from 1 to 65535."), (1, v[1].chars().all(|c| c.is_ascii_alphanumeric() || c == '-'), "GitHub user: letters, digits and -.")])?;
+                self.cfg.remote.ssh = Some(Ssh { enable: true, port, ..Default::default() });
+                self.cfg.users[0].github = (!v[1].is_empty()).then(|| v[1].clone());
+            }
+            Some(Sub::Extra(Extra::Tailscale)) => {
+                self.check(&[(0, v[0].is_empty() || v[0].starts_with("tskey-"), "Tailscale auth keys start with tskey-.")])?;
+                self.cfg.remote.tailscale = Some(Tailscale { enable: true, auth_key: (!v[0].is_empty()).then(|| v[0].clone()), ..Default::default() });
+            }
+            Some(Sub::Extra(_)) => {
+                self.check(&[(0, !v[0].is_empty(), "Password can't be empty."), (1, v[0] == v[1], "Passwords don't match.")])?;
+                self.cfg.remote.vnc = Some(Vnc { enable: true, password: Some(v[0].clone()), ..Default::default() });
+            }
+            None => return self.submit_step(&v),
+        }
+        self.sub = None;
+        Ok(Action::None)
+    }
+
+    fn submit_step(&mut self, v: &[String]) -> Result<Action> {
+        match self.step {
+            Step::Accounts => {
+                self.check(&[
+                    (0, valid_hostname(&v[0]), "Hostname: lowercase letters, digits and -, at most 63 characters."),
+                    (1, valid_username(&v[1]), "Username: lowercase letters, digits, - and _, starting with a letter."),
+                    (1, !self.cfg.users.iter().skip(1).any(|u| u.name == v[1]), "That name is taken by another user."),
+                    (2, !v[2].contains([':', ',']), "Full name can't contain : or ,"),
+                    (3, !self.form[3].value.is_empty(), "Password can't be empty."),
+                    (4, self.form[3].value == self.form[4].value, "Passwords don't match."),
+                    (6, self.form[5].value == self.form[6].value, "Root passwords don't match."),
+                ])?;
+                let main = User {
+                    name: v[1].clone(),
+                    password: Some(self.form[3].value.clone()),
+                    full_name: (!v[2].is_empty()).then(|| v[2].clone()),
+                    ..self.cfg.users.first().cloned().unwrap_or_default()
+                };
+                self.cfg.hostname = v[0].clone();
+                self.cfg.root_password = (!self.form[5].value.is_empty()).then(|| self.form[5].value.clone());
+                if self.cfg.users.is_empty() {
+                    self.cfg.users.push(main);
+                } else {
+                    self.cfg.users[0] = main;
+                }
+            }
+            Step::Wifi => {
+                self.cfg.network.connections = if v[0].is_empty() {
+                    vec![]
+                } else {
+                    let mut wifi = json!({ "name": v[0], "type": "wifi", "ssid": v[0] });
+                    if !self.form[1].value.is_empty() {
+                        wifi["password"] = self.form[1].value.clone().into();
+                    }
+                    vec![serde_json::from_value(wifi)?]
+                };
+            }
+            Step::Packages => {
+                let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+                self.cfg.packages.pacman = words(&v[0]);
+                self.cfg.packages.aur = words(&v[1]);
+            }
+            _ => {}
+        }
+        Ok(self.finish_step())
+    }
+}
+
+fn valid_hostname(s: &str) -> bool {
+    (1..=63).contains(&s.len()) && !s.starts_with('-') && !s.ends_with('-') && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn valid_username(s: &str) -> bool {
+    let mut chars = s.chars();
+    s.len() <= 32
+        && s != "root"
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui;
+    use installer::system::Gpu;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn validators() {
+        assert!(valid_username("_arch-user1") && !valid_username("1arch") && !valid_username("Arch") && !valid_username("root"));
+        assert!(valid_hostname("my-box") && !valid_hostname("-box") && !valid_hostname("My.box") && !valid_hostname(""));
+    }
+
+    fn press(app: &mut App, code: KeyCode) -> Action {
+        app.on_key(KeyEvent::from(code))
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        text.chars().for_each(|c| {
+            press(app, KeyCode::Char(c));
+        });
+    }
+
+    fn until(app: &mut App, step: Step) {
+        for _ in 0..30 {
+            if app.step == step {
+                return;
+            }
+            press(app, KeyCode::Enter);
+            assert!(app.error.is_none(), "{:?}: {:?}", app.step, app.error);
+        }
+        panic!("never reached {step:?}");
+    }
+
+    fn machine() -> System {
+        let dev = |path: &str, kind: &str, fstype: Option<&str>| BlockDevice {
+            path: path.into(),
+            kind: kind.into(),
+            size: Some(100 << 30),
+            fstype: fstype.map(String::from),
+            parttypename: (path == "/dev/sda1").then(|| "EFI System".into()),
+            pkname: (kind == "part").then(|| "sda".into()),
+            ..Default::default()
+        };
+        System {
+            devices: vec![dev("/dev/sda", "disk", None), dev("/dev/sda1", "part", Some("vfat")), dev("/dev/sda2", "part", None), dev("/dev/sda3", "part", Some("ext4")), dev("/dev/sda4", "part", Some("ntfs"))],
+            gpus: vec![Gpu { vendor: GpuVendor::Amd, device: 0x15d8 }, Gpu { vendor: GpuVendor::Nvidia, device: 0x1f99 }],
+            uefi: true,
+            timezones: vec!["Asia/Kolkata".into(), "UTC".into()],
+            locales: vec!["en_IN UTF-8".into(), "en_US.UTF-8 UTF-8".into()],
+            wireless: vec!["wlan0".into()],
+            interfaces: vec!["wlan0".into()],
+            ..Default::default()
+        }
+    }
+
+    fn render(app: &mut App, terminal: &mut Terminal<TestBackend>) -> String {
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = buffer.content.chunks(80).map(|row| row.iter().map(|c| c.symbol()).collect::<String>() + "\n").collect();
+        if std::env::var("SHOW_SCREENS").is_ok() {
+            println!("{text}");
+        }
+        text
+    }
+
+    /// Walks the wizard on fake hardware, rendering every screen at 80x25 (Linux console size).
+    #[test]
+    fn wizard_existing_partitions() {
+        let logger = Logger::new(false);
+        let mut app = App::with_system(&logger, machine());
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
+
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::End);
+        assert!(matches!(press(&mut app, KeyCode::Enter), Action::Partition(d) if d == "/dev/sda"));
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+
+        // EFI preselected, kept; root on the EFI partition is refused
+        assert_eq!(app.step, Step::Boot);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::Root);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.error.as_deref().unwrap().contains("already used"));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+
+        // home on sda3, keep; sda4 at /data
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::FormatHome);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::ExtraMounts);
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "data");
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.storage.other[0].mountpoint, "/data");
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+
+        press(&mut app, KeyCode::Enter); // swap
+        assert_eq!(app.step, Step::Mirrors);
+        typed(&mut app, "ind");
+        render(&mut app, &mut terminal);
+        assert_eq!(app.visible().len(), 2);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.mirrors, "India");
+        press(&mut app, KeyCode::Enter); // timezone
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter); // locale en_IN
+        assert_eq!(app.cfg.locale, "en_IN");
+
+        assert_eq!(app.step, Step::Accounts);
+        app.form[0].value.clear();
+        typed(&mut app, "tuf");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "parapsychic");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "Para Psychic");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "pw");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "px");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!((app.focus, app.error.is_some()), (4, true));
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Backspace);
+        typed(&mut app, "w");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::Shell);
+        assert_eq!(app.cfg.root_password, None);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.users[0].shell, LoginShell::Zsh);
+
+        // a second, non-admin user
+        assert_eq!(app.step, Step::MoreUsers);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "guest");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "g");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "g");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.admins(), ["parapsychic"]);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+
+        until(&mut app, Step::Nvidia);
+        render(&mut app, &mut terminal);
+        assert_eq!(app.list.selected(), Some(0)); // GTX 1650 -> nvidia-open
+        until(&mut app, Step::Desktop);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.desktop, Desktop::Hyprland);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.autologin.as_deref(), Some("parapsychic"));
+        press(&mut app, KeyCode::Enter); // firefox
+
+        assert_eq!(app.step, Step::Wifi);
+        typed(&mut app, "Home-5G");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "secret");
+        press(&mut app, KeyCode::Enter);
+
+        // SSH with GitHub keys, VNC, Docker
+        assert_eq!(app.step, Step::Extras);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "parapsychic");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.ssh().map(|s| s.port), Some(22));
+        assert_eq!(app.cfg.users[0].github.as_deref(), Some("parapsychic"));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "vnc");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "vnc");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.cfg.docker.is_some() && app.cfg.vnc().is_some());
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+
+        assert_eq!(app.step, Step::Packages);
+        typed(&mut app, "htop git");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "visual-studio-code-bin");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter); // reboot
+
+        assert_eq!(app.step, Step::Review);
+        assert_eq!(app.problems, Vec::<String>::new());
+        let screen = render(&mut app, &mut terminal);
+        assert!(screen.contains("/dev/sda2"), "{screen}");
+        assert!(matches!(press(&mut app, KeyCode::Char('y')), Action::Install));
+
+        // what it builds reads back as a valid config file
+        let value = serde_json::to_value(&app.cfg).unwrap();
+        assert_eq!(validate::schema_errors(&value), Vec::<String>::new());
+        let p = app.cfg.packages(&app.sys.gpus);
+        for pkg in ["nvidia-open", "vulkan-radeon", "hyprland", "wayvnc", "openssh", "docker", "zsh", "htop"] {
+            assert!(p.repo.iter().any(|x| x == pkg), "missing {pkg}");
+        }
+        assert_eq!(p.aur, ["visual-studio-code-bin"]);
+
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.step, Step::Finish);
+    }
+
+    #[test]
+    fn wizard_erase_disk() {
+        let logger = Logger::new(false);
+        let mut app = App::with_system(&logger, machine());
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::ExtraMounts);
+        assert!(app.cfg.storage.partitioning[0].wipe);
+        until(&mut app, Step::Accounts);
+        typed(&mut app, "x");
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Tab);
+        }
+        typed(&mut app, "arch");
+        app.form[1].value = "arch".into();
+        app.form[4].value = "arch".into();
+        until(&mut app, Step::Review);
+        let screen = render(&mut app, &mut terminal);
+        assert!(screen.contains("ERASE"), "{screen}");
+        assert_eq!(app.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn preview_quits_with_esc() {
+        let logger = Logger::new(false);
+        let cfg: Config = serde_norway::from_str(include_str!("../../unattended-config.yaml")).unwrap();
+        let mut app = App::preview(&logger, machine(), cfg);
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::PageDown);
+        render(&mut app, &mut terminal);
+        assert!(matches!(press(&mut app, KeyCode::Esc), Action::Quit));
     }
 }

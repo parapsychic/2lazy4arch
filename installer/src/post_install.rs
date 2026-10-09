@@ -1,142 +1,156 @@
-use std::fs;
+use std::{fs, path::Path};
 
-use crate::{pacman::Pacman, utils::{sed, RICE_SCRIPT_URL}};
-use anyhow::Result;
+use crate::pacman::Pacman;
+use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
-/// Preferred GUI
-pub enum DesktopEnvironment {
-    Gnome,
-    KDE,
-    Hyprland,
-}
+// ParaPsychic mode. Fork? Point these at your own dotfiles.
+const DOTFILES_REPO: &str = "https://github.com/parapsychic/dot-files.git";
+const GIT_NAME: &str = "parapsychic";
+const GIT_EMAIL: &str = "febinkdominic@outlook.com";
 
-/// PostInstall installs optional stuff.
-/// This is same as the postinstall.sh
-/// Calling PostInstall functions without the process running as superuser will fail.
+/// PostInstall installs optional stuff after the first boot.
+/// Runs as the normal user; privileged steps go through sudo.
 pub struct PostInstall<'a> {
     shell: Shell<'a>,
     pacman: Pacman<'a>,
-    is_yay_installed: bool,
 }
 
 impl<'a> PostInstall<'a> {
-    /// Installs additional optional software
     pub fn new<'b>(logger: &'b Logger) -> PostInstall<'b> {
-        let shell = Shell::new("PostInstall", logger);
-        let pacman = Pacman::new(logger);
-
         PostInstall {
-            shell,
-            pacman,
-            is_yay_installed: false,
+            shell: Shell::new("PostInstall", logger),
+            pacman: Pacman::new(logger),
         }
     }
 
-    /// reads from a file and installs all the packages.
-    /// expects valid files without errors or invalid packages
-    /// packages file uses pacman to install.
-    /// aur packages file uses yay to install
-    /// A valid file contains valid package names separated by a newline only
-    pub fn install_additionals(
-        &mut self,
-        packages_file: &str,
-        aur_packages_file: &str,
-    ) -> Result<()> {
-        self.shell.log("Installing packages:");
-        self.shell.log("Parsing files");
-        let parsed_file = fs::read_to_string(packages_file.trim())?;
-        let packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
-        self.shell.log(&format!(
-            "Installing packages with pacman: {}",
-            parsed_file
-        ));
+    /// Packages skipped so far because they don't exist.
+    pub fn skipped(&self) -> &[String] {
+        &self.pacman.skipped
+    }
 
-        self.pacman.pacman().install(packages)?;
+    pub fn install_packages(&mut self, packages: &[&str]) -> Result<()> {
+        self.pacman.pacman().install(packages)
+    }
 
-        if !self.is_yay_installed {
-            self.shell.log("Installing yay");
+    /// Installs AUR (or repo) packages with yay, bootstrapping yay first if needed.
+    pub fn install_aur(&mut self, packages: &[&str]) -> Result<()> {
+        if packages.is_empty() {
+            return Ok(());
+        }
+        if !Path::new("/usr/bin/yay").exists() {
             self.setup_yay()?;
         }
+        self.pacman.yay().install(packages)
+    }
 
+    fn setup_yay(&mut self) -> Result<()> {
         self.shell.log("Installing yay");
-        let parsed_file = fs::read_to_string(aur_packages_file.trim())?;
-        let aur_packages = parsed_file.split("\n").filter(|x| !x.is_empty()).collect::<Vec<&str>>();
-        self.shell
-            .log(&format!("Installing packages with aur: {}", parsed_file));
-        self.pacman.yay().install(aur_packages)?;
-        Ok(())
-    }
-
-    pub fn setup_yay(&mut self) -> Result<()> {
-        match self.shell.run_and_wait_with_args("rm", "-fr yay") {
-            Ok(_) => {
-                self.shell.log("Removed existing yay repo");
-            }
-            Err(_) => {
-                self.shell.log("Yay repo not found. Cloning...");
-            }
-        }
-
-        // yay requires go to install
-        self.pacman.install(vec!["go"])?;
-
-        self.shell
-            .run_and_wait_with_args("git", "clone https://aur.archlinux.org/yay.git")?;
-
-        self.shell.run_in_directory_and_wait_with_args(
-            "yay",
-            "makepkg",
-            "-si --noconfirm PKGBUILD",
+        self.pacman.pacman().install(&["git", "base-devel", "go"])?;
+        let dir = "/tmp/2lazy4arch-yay";
+        let _ = fs::remove_dir_all(dir);
+        self.shell.run_and_wait_with_args(
+            "git",
+            &format!("clone --depth 1 https://aur.archlinux.org/yay.git {dir}"),
         )?;
-
-        self.is_yay_installed = true;
+        self.shell
+            .run_in_directory_and_wait_with_args(dir, "makepkg", "-si --noconfirm")?;
         Ok(())
     }
 
-    /// Installs the desktop environment.
-    pub fn install_desktop(&mut self, de: DesktopEnvironment) -> Result<()> {
-        self.shell.log("Installing desktop environment");
-
-        match de {
-            DesktopEnvironment::Gnome => {
-                self.shell.log("Installing gnome");
-                self.pacman
-                    .pacman()
-                    .install(vec![&"gnome", &"gnome-extra"])?;
-            }
-            DesktopEnvironment::KDE => {
-                self.shell.log("Installing kde");
-                self.pacman
-                    .pacman()
-                    .install(vec![&"plasma", &"kde-applications-meta"])?;
-            }
-            DesktopEnvironment::Hyprland => {
-                self.shell.log("Installing hyprland");
-                self.pacman
-                    .yay()
-                    .install(vec![&"hyprland-git", &"hyprpaper"])?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// good to haves.
-    /// includes specific stuff for me
+    /// ParaPsychic's rice: dotfiles, dwm/dmenu from them, X touchpad config. Was the `rice` script.
     pub fn misc_options(&mut self) -> Result<()> {
         self.shell.log("Running ParaPsychic specific settings...");
-        self.shell.log("Setting up pacman in style");
-        sed("/etc/pacman.conf", 33, "ILoveCandy")?;
-        sed("/etc/pacman.conf", 34, "Color")?;
+        let home = std::env::var("HOME")?;
+        let dots = format!("{home}/dot-files");
 
-        self.shell.log("Downloading ricing scripts...");
-        self.shell.run_and_wait_with_args("curl", &format!("{} -o rice", RICE_SCRIPT_URL))?;
-        self.shell.run_and_wait_with_args("chmod", "+x rice")?;
-        self.shell.log("Ricing...");
-        self.shell.run("./rice")?;
+        self.shell.log("Setting up pacman in style, enabling multilib");
+        self.shell.run_and_wait_with_args(
+            "sudo",
+            r"sed -i -e 's/^#Color$/Color\nILoveCandy/' -e '/^#\[multilib\]$/,/^#Include/ s/^#//' /etc/pacman.conf",
+        )?;
+
+        self.install_packages(&[
+            "xorg-server", "xorg-xinit", "libx11", "libxft", "libxinerama", // X + dwm build deps
+            "mpv", "htop", "fastfetch", "fzf", "lolcat", "ueberzug", "ttf-hack", "noto-fonts-emoji",
+            "brightnessctl", "lf", "ytfzf",
+        ])?;
+        self.install_aur(&["yt-dlp-drop-in", "tabbed", "otf-manjari"])?;
+
+        self.shell.log("Cloning dot-files");
+        let _ = fs::remove_dir_all(&dots);
+        self.shell
+            .run_and_wait_with_args("git", &format!("clone {DOTFILES_REPO} {dots}"))?;
+
+        self.shell.log("Building dwm and dmenu");
+        for (src, dest) in [("dwm", ".dwm"), ("dmenu", ".dmenu")] {
+            let dest = format!("{home}/{dest}");
+            self.copy(&format!("{dots}/{src}"), &dest)?;
+            self.shell.run_in_directory_and_wait_with_args(&dest, "make", "")?;
+            self.shell
+                .run_in_directory_and_wait_with_args(&dest, "sudo", "make install")?;
+        }
+        self.sudo_write(
+            "/usr/share/xsessions/dwm.desktop",
+            "[Desktop Entry]\nEncoding=UTF-8\nName=Dwm\nComment=the dynamic window manager\nExec=/usr/local/bin/dwm\nIcon=dwm\nType=XSession\n",
+        )?;
+
+        self.shell.log("Copying dotfiles");
+        fs::create_dir_all(format!("{home}/.config"))?;
+        for (src, dest) in [
+            (".xinitrc", ".xinitrc"),
+            (".bashrc", ".bashrc"),
+            ("autostart.sh", "autostart.sh"),
+            (".bin", ".bin"),
+            ("nvim", ".config/nvim"),
+            ("dunst", ".config/dunst"),
+            ("conky", ".config/conky"),
+            ("alacritty", ".config/alacritty"),
+            ("lf", ".config/lf"),
+        ] {
+            self.copy(&format!("{dots}/{src}"), &format!("{home}/{dest}"))?;
+        }
+
+        self.shell.log("Setting up Git (not authenticated with GitHub)");
+        self.shell
+            .run_and_wait_with_args("git", &format!("config --global user.email {GIT_EMAIL}"))?;
+        self.shell
+            .run_and_wait_with_args("git", &format!("config --global user.name {GIT_NAME}"))?;
+
+        self.shell.log("Setting up touchpad");
+        self.sudo_write(
+            "/etc/X11/xorg.conf.d/90-touchpad.conf",
+            r#"Section "InputClass"
+    Identifier "touchpad"
+    MatchIsTouchpad "on"
+    Driver "libinput"
+    Option "Tapping" "on"
+    Option "NaturalScrolling" "on"
+    Option "ScrollMethod" "twofinger"
+    Option "TappingDrag" "on"
+    Option "DisableWhileTyping" "on"
+EndSection
+"#,
+        )?;
+
         self.shell.log("Ricing complete");
+        Ok(())
+    }
 
+    /// `cp -rT`: copies a file or a directory's contents onto `dest`, without nesting
+    /// `src` inside `dest` when it already exists.
+    fn copy(&mut self, src: &str, dest: &str) -> Result<()> {
+        self.shell.run_and_wait_with_args("cp", &format!("-rT {src} {dest}"))?;
+        Ok(())
+    }
+
+    /// Writes a root-owned file, creating parent directories.
+    fn sudo_write(&mut self, path: &str, content: &str) -> Result<()> {
+        let tmp = std::env::temp_dir().join("2lazy4arch-file");
+        fs::write(&tmp, content)?;
+        let tmp = tmp.to_str().ok_or_else(|| anyhow!("non UTF-8 temp dir"))?;
+        self.shell
+            .run_and_wait_with_args("sudo", &format!("install -Dm644 {tmp} {path}"))?;
         Ok(())
     }
 }

@@ -209,7 +209,7 @@ impl<'a> Shell<'a> {
             self.set_last_command(cmd, &output.status, None, None);
             return Ok(output);
         }
-        let output = Command::new(cmd).output()?;
+        let output = Command::new(cmd).current_dir(dir).output()?;
 
         if !output.status.success() {
             return Err(anyhow!(
@@ -293,10 +293,13 @@ impl<'a> Shell<'a> {
         let status = Command::new(cmd).args(args_vec).status()?;
 
         if !status.success() {
+            self.log(&format!("`{cmd} {args}` failed with {status}"));
             return Err(anyhow!(
-                "{}: {} failed. Exited with non-zero exit code",
+                "{}: `{} {}` failed ({})",
                 self.identifier.to_uppercase(),
-                cmd
+                cmd,
+                args,
+                status
             ));
         }
 
@@ -327,6 +330,27 @@ impl<'a> Shell<'a> {
 
         self.set_last_command(cmd, &status, None, None);
         Ok(status)
+    }
+
+    /// Run the program with given args, feeding `input` to its stdin, and wait.
+    /// Raises error if exited with non-zero code. The input isn't logged (it may be a password).
+    pub fn run_with_input(&mut self, cmd: &str, args: &str, input: &str) -> Result<()> {
+        let args_vec = shell_words::split(args)?;
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {} {}", cmd, args);
+            return Ok(());
+        }
+        let mut child = Command::new(cmd).args(args_vec).stdin(Stdio::piped()).spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_bytes())?;
+        }
+        let status = child.wait()?;
+        if !status.success() {
+            self.log(&format!("`{cmd} {args}` failed with {status}"));
+            return Err(anyhow!("{}: `{} {}` failed ({})", self.identifier.to_uppercase(), cmd, args, status));
+        }
+        self.set_last_command(cmd, &status, None, None);
+        Ok(())
     }
 
     /// Spawn the program and do not wait for it.

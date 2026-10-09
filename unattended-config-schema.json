@@ -1,0 +1,788 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "2lazy4arch config",
+  "description": "Unattended install config for 2lazy4arch. Nothing is asked; every key has a default except the disk and at least one user with a password.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "storage", "users"],
+  "properties": {
+    "version": { "const": 1 },
+    "finish": {
+      "enum": ["reboot", "poweroff", "stay"],
+      "default": "reboot",
+      "description": "What to do once everything has finished. Skipped if the install fails."
+    },
+    "storage": { "$ref": "#/definitions/storage" },
+    "mirrors": {
+      "type": "string",
+      "minLength": 1,
+      "default": "auto",
+      "description": "A country from the wizard's mirror list, or auto to keep the list the ISO made at boot."
+    },
+    "timezone": {
+      "type": "string",
+      "minLength": 1,
+      "default": "UTC",
+      "examples": ["UTC", "Asia/Kolkata", "Europe/Berlin"]
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^\\S+$",
+      "default": "en_US.UTF-8"
+    },
+    "hostname": { "type": "string", "pattern": "^[a-z0-9-]+$", "default": "archlinux" },
+    "users": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The first user is the main one: AUR builds, default hook user, parapsychic_mode: true. Usernames must be unique and not root.",
+      "items": { "$ref": "#/definitions/user" }
+    },
+    "root_password": { "type": "string", "minLength": 1 },
+    "root_password_hash": { "$ref": "#/definitions/cryptHash" },
+    "autologin": {
+      "$ref": "#/definitions/username",
+      "description": "Log this user straight into the desktop at boot. Default: none."
+    },
+    "bootloader": {
+      "enum": ["grub", "systemd-boot"],
+      "default": "grub",
+      "description": "grub also boots other OSes."
+    },
+    "admin_tool": {
+      "enum": ["sudo", "doas"],
+      "default": "sudo",
+      "description": "sudo stays set up either way."
+    },
+    "hardware": { "$ref": "#/definitions/hardware" },
+    "desktop": {
+      "enum": ["dwm", "hyprland", "kde", "gnome", "xfce", "lxde", "none"],
+      "default": "none",
+      "description": "Login screen follows: lightdm (dwm, xfce), sddm (hyprland), Plasma Login (kde), gdm (gnome), lxdm (lxde). none = console only."
+    },
+    "browser": {
+      "enum": ["firefox", "librewolf", "chromium", "vivaldi", "brave", "zen", "chrome", "none"],
+      "description": "Default: firefox with a desktop, none without. brave, zen and chrome come from the AUR."
+    },
+    "network": { "$ref": "#/definitions/network" },
+    "remote": { "$ref": "#/definitions/remote" },
+    "packages": { "$ref": "#/definitions/packages" },
+    "docker": { "$ref": "#/definitions/docker" },
+    "autostart": { "$ref": "#/definitions/autostart" },
+    "hooks": { "$ref": "#/definitions/hooks" },
+    "parapsychic_mode": {
+      "default": false,
+      "description": "Custom dwm/dmenu builds, multilib, pacman colour and candy, touchpad config, plus dotfiles: true for the first user, or a list of users.",
+      "anyOf": [
+        { "type": "boolean" },
+        { "$ref": "#/definitions/usernameList" }
+      ]
+    }
+  },
+  "not": { "required": ["root_password", "root_password_hash"] },
+
+  "definitions": {
+    "partitionRef": {
+      "type": "string",
+      "pattern": "^(/dev/\\S+|(PARTLABEL|PARTUUID|UUID|LABEL)=\\S.*)$",
+      "description": "A device path or an fstab-style PARTLABEL= / PARTUUID= / UUID= / LABEL= reference.",
+      "examples": ["/dev/nvme0n1p2", "PARTLABEL=arch-root"]
+    },
+
+    "formatChoice": {
+      "enum": ["auto", "keep", "format"],
+      "default": "auto",
+      "description": "auto formats a blank partition and keeps one that already has a filesystem."
+    },
+
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Needs partitioning, or a root partition that already exists.",
+      "anyOf": [
+        { "required": ["partitioning"] },
+        { "required": ["root"] }
+      ],
+      "properties": {
+        "partitioning": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Leave out to use the partitions already on disk.",
+          "items": { "$ref": "#/definitions/disk" }
+        },
+        "efi": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Mounted at /boot.",
+          "properties": {
+            "partition": {
+              "default": "auto",
+              "anyOf": [
+                { "const": "auto", "description": "The EFI partition made by partitioning, else the first EFI System partition found." },
+                { "$ref": "#/definitions/partitionRef" }
+              ]
+            },
+            "format": {
+              "$ref": "#/definitions/formatChoice",
+              "description": "format = FAT32."
+            }
+          }
+        },
+        "root": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["partition"],
+          "description": "Always formatted as ext4. Default: the first linux partition made by partitioning.",
+          "properties": {
+            "partition": { "$ref": "#/definitions/partitionRef" }
+          }
+        },
+        "home": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["partition"],
+          "properties": {
+            "partition": {
+              "default": "none",
+              "anyOf": [
+                { "const": "none" },
+                { "$ref": "#/definitions/partitionRef" }
+              ]
+            },
+            "format": {
+              "$ref": "#/definitions/formatChoice",
+              "description": "format = ext4."
+            }
+          },
+          "if": {
+            "properties": { "partition": { "const": "none" } },
+            "required": ["partition"]
+          },
+          "then": { "not": { "required": ["format"] } }
+        },
+        "other": {
+          "type": "array",
+          "default": [],
+          "description": "Extra mounts. Never formatted, so each needs a filesystem already.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["partition", "mountpoint"],
+            "properties": {
+              "partition": { "$ref": "#/definitions/partitionRef" },
+              "mountpoint": {
+                "type": "string",
+                "pattern": "^/\\S+$",
+                "not": { "enum": ["/boot", "/boot/", "/home", "/home/"] },
+                "examples": ["/data", "/mnt/windows"]
+              }
+            }
+          }
+        },
+        "swap": {
+          "enum": ["none", 1, 2, 4, 8, 16, 32, 64],
+          "default": 4,
+          "description": "Swap file size in GB."
+        }
+      }
+    },
+
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disk"],
+      "properties": {
+        "disk": {
+          "type": "string",
+          "pattern": "^(auto|/dev/\\S+)$",
+          "description": "auto = the only internal disk; the install stops if there are several.",
+          "examples": ["auto", "/dev/nvme0n1", "/dev/disk/by-id/nvme-Samsung_SSD_980_1TB_S000000000"]
+        },
+        "wipe": {
+          "type": "boolean",
+          "default": false,
+          "description": "true writes a new empty GPT table and destroys everything on the disk. false adds partitions to free space."
+        },
+        "add": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Default: arch-efi (efi, 1GiB) + arch-root (linux, rest).",
+          "items": { "$ref": "#/definitions/newPartition" }
+        }
+      }
+    },
+
+    "newPartition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "size"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,36}$",
+          "description": "GPT partition name; refer to it as PARTLABEL=<name>."
+        },
+        "type": { "enum": ["efi", "linux"] },
+        "size": {
+          "type": "string",
+          "pattern": "^(rest|[1-9][0-9]*(MiB|GiB|TiB))$",
+          "description": "rest = remaining space, last partition of the disk only."
+        }
+      }
+    },
+
+    "cryptHash": {
+      "type": "string",
+      "pattern": "^\\$[0-9a-z]+\\$\\S+$",
+      "description": "A crypt(3) hash, e.g. from `openssl passwd -6` or `mkpasswd`."
+    },
+
+    "username": { "type": "string", "pattern": "^[a-z_][a-z0-9_-]*$" },
+
+    "usernameList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/username" }
+    },
+
+    "sshKey": { "type": "string", "pattern": "^(ssh-|ecdsa-|sk-)\\S+ \\S+" },
+
+    "user": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "Needs one of password or password_hash.",
+      "properties": {
+        "name": {
+          "allOf": [
+            { "$ref": "#/definitions/username" },
+            { "not": { "const": "root" } }
+          ]
+        },
+        "password": { "type": "string", "minLength": 1 },
+        "password_hash": { "$ref": "#/definitions/cryptHash" },
+        "admin": {
+          "type": "boolean",
+          "description": "In wheel (sudo / doas) and the docker group. Default: true for the first user, false for the rest."
+        },
+        "full_name": { "type": "string", "minLength": 1, "pattern": "^[^:,\\n]+$" },
+        "shell": { "enum": ["bash", "zsh", "fish"], "default": "bash" },
+        "groups": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "type": "string", "pattern": "^[a-z_][a-z0-9_-]*$" }
+        },
+        "ssh_keys": {
+          "type": "array",
+          "default": [],
+          "description": "Put in ~/.ssh/authorized_keys.",
+          "items": { "$ref": "#/definitions/sshKey" }
+        },
+        "github": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+$",
+          "description": "Also add the keys at github.com/<user>.keys."
+        }
+      },
+      "oneOf": [
+        { "required": ["password"] },
+        { "required": ["password_hash"] }
+      ]
+    },
+
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "microcode": {
+          "enum": ["auto", "intel", "amd", "none"],
+          "default": "auto"
+        },
+        "gpu": {
+          "default": "auto",
+          "anyOf": [
+            {
+              "enum": ["auto", "none"],
+              "description": "auto: a driver for every GPU found, NVIDIA picked by generation from the PCI device ID. none: no GPU drivers, Intel included."
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "Installed whether or not that GPU is present. At most one NVIDIA and one AMD entry.",
+              "items": { "enum": ["nvidia", "nvidia-legacy", "nouveau", "amd", "amd-pro"] },
+              "allOf": [
+                { "not": { "allOf": [ { "contains": { "const": "nvidia" } }, { "contains": { "const": "nvidia-legacy" } } ] } },
+                { "not": { "allOf": [ { "contains": { "const": "nvidia" } }, { "contains": { "const": "nouveau" } } ] } },
+                { "not": { "allOf": [ { "contains": { "const": "nvidia-legacy" } }, { "contains": { "const": "nouveau" } } ] } },
+                { "not": { "allOf": [ { "contains": { "const": "amd" } }, { "contains": { "const": "amd-pro" } } ] } }
+              ]
+            }
+          ]
+        }
+      }
+    },
+
+    "ipConfig": {
+      "default": "auto",
+      "anyOf": [
+        { "enum": ["auto", "disabled"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["auto", "manual", "disabled"], "default": "auto" },
+            "address": {
+              "type": "string",
+              "pattern": "^\\S+/[0-9]{1,3}$",
+              "description": "Address with prefix length, e.g. 192.168.1.50/24."
+            },
+            "gateway": { "type": "string", "minLength": 1 },
+            "dns": {
+              "type": "array",
+              "description": "Replaces the DNS this connection would get from DHCP.",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "method": { "const": "manual" } }, "required": ["method"] },
+              "then": { "required": ["address"] }
+            },
+            {
+              "if": { "not": { "properties": { "method": { "const": "manual" } }, "required": ["method"] } },
+              "then": { "not": { "anyOf": [ { "required": ["address"] }, { "required": ["gateway"] } ] } }
+            }
+          ]
+        }
+      ]
+    },
+
+    "eap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "identity"],
+      "properties": {
+        "method": { "enum": ["peap", "ttls", "tls"] },
+        "identity": { "type": "string", "minLength": 1 },
+        "anonymous_identity": { "type": "string", "minLength": 1 },
+        "password": { "type": "string", "minLength": 1 },
+        "phase2": { "enum": ["mschapv2", "mschap", "pap", "chap", "gtc"], "default": "mschapv2" },
+        "ca_cert": { "type": "string", "minLength": 1 },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The RADIUS server's certificate must match this domain."
+        },
+        "client_cert": { "type": "string", "minLength": 1 },
+        "private_key": { "type": "string", "minLength": 1 },
+        "private_key_password": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "method": { "const": "tls" } } },
+      "then": {
+        "required": ["client_cert", "private_key"],
+        "not": { "anyOf": [ { "required": ["password"] }, { "required": ["phase2"] } ] }
+      },
+      "else": {
+        "required": ["password"],
+        "not": { "anyOf": [ { "required": ["client_cert"] }, { "required": ["private_key"] }, { "required": ["private_key_password"] } ] }
+      }
+    },
+
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["ethernet", "wifi", "pppoe"] },
+        "interface": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,15}$" },
+        "autoconnect": { "type": "boolean", "default": true },
+        "priority": { "type": "integer", "default": 0 },
+        "mac": {
+          "type": "string",
+          "pattern": "^(permanent|stable|random|[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5})$",
+          "default": "permanent"
+        },
+        "ipv4": { "$ref": "#/definitions/ipConfig" },
+        "ipv6": { "$ref": "#/definitions/ipConfig" },
+        "ssid": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "hidden": { "type": "boolean", "default": false },
+        "security": { "enum": ["wpa-psk", "sae", "owe", "open", "eap"] },
+        "password": { "type": "string", "minLength": 1 },
+        "eap": { "$ref": "#/definitions/eap" },
+        "username": { "type": "string", "minLength": 1 },
+        "vlan": { "type": "integer", "minimum": 1, "maximum": 4094 },
+        "mtu": { "type": "integer", "minimum": 576, "maximum": 9216 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "wifi" } } },
+          "then": {
+            "required": ["ssid"],
+            "not": { "anyOf": [ { "required": ["username"] }, { "required": ["vlan"] } ] }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "ethernet" } } },
+          "then": {
+            "not": { "anyOf": [
+              { "required": ["ssid"] }, { "required": ["hidden"] }, { "required": ["security"] },
+              { "required": ["password"] }, { "required": ["eap"] }, { "required": ["username"] }
+            ] }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "pppoe" } } },
+          "then": {
+            "required": ["interface", "username", "password"],
+            "not": { "anyOf": [
+              { "required": ["ssid"] }, { "required": ["hidden"] }, { "required": ["security"] },
+              { "required": ["eap"] }, { "required": ["mac"] }
+            ] }
+          }
+        },
+        {
+          "if": { "properties": { "security": { "const": "eap" } }, "required": ["security"] },
+          "then": { "required": ["eap"], "not": { "required": ["password"] } },
+          "else": { "not": { "required": ["eap"] } }
+        },
+        {
+          "if": { "properties": { "security": { "enum": ["wpa-psk", "sae"] } }, "required": ["security"] },
+          "then": { "required": ["password"] }
+        },
+        {
+          "if": { "properties": { "security": { "enum": ["open", "owe"] } }, "required": ["security"] },
+          "then": { "not": { "required": ["password"] } }
+        }
+      ]
+    },
+
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Saved as NetworkManager connections; the ISO uses them too. Default: DHCP on any ethernet port.",
+      "properties": {
+        "connections": {
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/definitions/connection" }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "servers": {
+              "type": "array",
+              "description": "Used on every connection over what DHCP hands out.",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "over_tls": {
+              "enum": ["off", "opportunistic", "strict"],
+              "default": "off",
+              "description": "Anything but off turns on systemd-resolved."
+            },
+            "search": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "hosts": {
+          "type": "object",
+          "description": "Extra /etc/hosts lines: address → names.",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+          }
+        },
+        "proxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Written to /etc/environment and used for the install.",
+          "properties": {
+            "http": { "type": "string", "minLength": 1 },
+            "https": { "type": "string", "minLength": 1 },
+            "no_proxy": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "listen": {
+      "enum": ["everywhere", "tailscale"],
+      "default": "everywhere",
+      "description": "tailscale: a firewall rule only lets the port in on the Tailscale interface."
+    },
+
+    "remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ssh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enable": { "type": "boolean", "default": false },
+            "port": { "$ref": "#/definitions/port", "default": 22 },
+            "password_login": {
+              "type": "boolean",
+              "description": "true: everyone can use a password. false: keys only. Default: users with ssh_keys or github need keys, the rest use passwords."
+            },
+            "root_login": { "type": "boolean", "default": false },
+            "listen": { "$ref": "#/definitions/listen" }
+          }
+        },
+        "vnc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enable": { "type": "boolean", "default": false },
+            "port": { "$ref": "#/definitions/port", "default": 5900 },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Classic VNC auth only uses the first 8 characters."
+            },
+            "view_only": { "type": "boolean", "default": false },
+            "listen": { "$ref": "#/definitions/listen" }
+          },
+          "if": { "properties": { "enable": { "const": true } }, "required": ["enable"] },
+          "then": { "required": ["password"] }
+        },
+        "tailscale": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enable": { "type": "boolean", "default": false },
+            "auth_key": {
+              "type": "string",
+              "pattern": "^tskey-\\S+$",
+              "description": "Joins the tailnet on first boot, then the key is deleted."
+            },
+            "hostname": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+            "ssh": { "type": "boolean", "default": false },
+            "accept_routes": { "type": "boolean", "default": false },
+            "advertise_exit_node": { "type": "boolean", "default": false },
+            "advertise_routes": {
+              "type": "array",
+              "default": [],
+              "items": { "type": "string", "pattern": "^\\S+/[0-9]{1,3}$" }
+            }
+          }
+        }
+      }
+    },
+
+    "docker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Installs Docker and Compose; containers are pulled and started on first boot.",
+      "properties": {
+        "login": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["username", "password"],
+            "properties": {
+              "registry": { "type": "string", "minLength": 1, "default": "docker.io" },
+              "username": { "type": "string", "minLength": 1 },
+              "password": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "containers": {
+          "type": "object",
+          "description": "docker compose services, written as-is. restart: unless-stopped is added when left out.",
+          "propertyNames": { "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "anyOf": [ { "required": ["image"] }, { "required": ["build"] } ]
+          }
+        },
+        "volumes": {
+          "type": "object",
+          "description": "Compose top-level volumes.",
+          "additionalProperties": { "type": ["object", "null"] }
+        },
+        "networks": {
+          "type": "object",
+          "description": "Compose top-level networks.",
+          "additionalProperties": { "type": ["object", "null"] }
+        },
+        "compose_files": {
+          "type": "array",
+          "default": [],
+          "description": "Your own compose files, each copied with its folder and started with docker compose up -d.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+
+    "packageNames": {
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "items": { "type": "string", "pattern": "^[a-z0-9@_+][a-z0-9@._+-]*$" }
+    },
+
+    "packages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "multilib": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable [multilib]."
+        },
+        "pacman": {
+          "$ref": "#/definitions/packageNames",
+          "description": "Installed with the base set."
+        },
+        "aur": {
+          "$ref": "#/definitions/packageNames",
+          "description": "Installed with yay, as the first user inside the new system."
+        },
+        "pacman_list": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File with one package name per line, merged with pacman."
+        },
+        "aur_list": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File with one package name per line, merged with aur."
+        }
+      }
+    },
+
+    "autostart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "description": "systemd units to enable.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9@._:-]+$" }
+        },
+        "apps": {
+          "type": "array",
+          "default": [],
+          "description": "Started when you log in.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$",
+                "description": "Defaults to the command's first word."
+              },
+              "command": { "type": "string", "minLength": 1 },
+              "users": {
+                "$ref": "#/definitions/usernameList",
+                "description": "Default: every user."
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "stepName": { "type": "string", "minLength": 1 },
+    "stepRun": { "type": "string", "minLength": 1, "description": "Inline script, run with bash -e." },
+    "stepScript": { "type": "string", "minLength": 1, "description": "Path to a script, run with its own shebang." },
+    "stepOnError": { "enum": ["stop", "continue"], "default": "stop" },
+
+    "preInstallStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/stepName" },
+        "run": { "$ref": "#/definitions/stepRun" },
+        "script": { "$ref": "#/definitions/stepScript" },
+        "on_error": { "$ref": "#/definitions/stepOnError" }
+      },
+      "oneOf": [ { "required": ["run"] }, { "required": ["script"] } ]
+    },
+
+    "postInstallStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/stepName" },
+        "run": { "$ref": "#/definitions/stepRun" },
+        "script": { "$ref": "#/definitions/stepScript" },
+        "on_error": { "$ref": "#/definitions/stepOnError" },
+        "chroot": {
+          "type": "boolean",
+          "default": true,
+          "description": "false runs on the ISO with the new system at $LAZY_ROOT."
+        },
+        "as": {
+          "$ref": "#/definitions/username",
+          "default": "root",
+          "description": "root or any listed user."
+        }
+      },
+      "oneOf": [ { "required": ["run"] }, { "required": ["script"] } ],
+      "if": {
+        "properties": { "chroot": { "const": false } },
+        "required": ["chroot"]
+      },
+      "then": {
+        "properties": { "as": { "const": "root" } }
+      }
+    },
+
+    "postSetupStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/stepName" },
+        "run": { "$ref": "#/definitions/stepRun" },
+        "script": { "$ref": "#/definitions/stepScript" },
+        "on_error": { "$ref": "#/definitions/stepOnError" },
+        "as": {
+          "$ref": "#/definitions/username",
+          "description": "root or any listed user. Default: the first user."
+        }
+      },
+      "oneOf": [ { "required": ["run"] }, { "required": ["script"] } ]
+    },
+
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pre_install": {
+          "type": "array",
+          "default": [],
+          "description": "On the ISO before partitioning, as root.",
+          "items": { "$ref": "#/definitions/preInstallStep" }
+        },
+        "post_install": {
+          "type": "array",
+          "default": [],
+          "description": "After the system is configured, inside it unless chroot: false.",
+          "items": { "$ref": "#/definitions/postInstallStep" }
+        },
+        "post_setup": {
+          "type": "array",
+          "default": [],
+          "description": "The very end, inside the new system, as the first user by default, with passwordless sudo.",
+          "items": { "$ref": "#/definitions/postSetupStep" }
+        }
+      }
+    }
+  }
+}
