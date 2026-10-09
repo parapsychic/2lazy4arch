@@ -28,6 +28,13 @@ linux-headers bluez bluez-utils pipewire pipewire-pulse pipewire-jack
 pipewire-alsa wireplumber alsa-utils git cups
 ```
 
+## Screenshots
+![Screenshot](docs/Screenshot3.png)
+
+![Screenshot](docs/Screenshot1.png)
+
+![Screenshot](docs/Screenshot2.png)
+
 ## How To Use?
 Boot the Arch ISO in UEFI mode and get online (`iwctl` for wifi; ethernet just works). Then, as root:
 
