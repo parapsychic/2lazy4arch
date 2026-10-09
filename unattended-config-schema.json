@@ -60,8 +60,8 @@
       "description": "Login screen follows: lightdm (dwm, xfce), sddm (hyprland), Plasma Login (kde), gdm (gnome), lxdm (lxde). none = console only."
     },
     "browser": {
-      "enum": ["firefox", "librewolf", "chromium", "vivaldi", "brave", "zen", "chrome", "none"],
-      "description": "Default: firefox with a desktop, none without. brave, zen and chrome come from the AUR."
+      "enum": ["firefox", "librewolf", "chromium", "epiphany", "konqueror", "qutebrowser", "falkon", "zen", "chrome", "none"],
+      "description": "Default: firefox with a desktop, none without. zen and chrome come from the AUR."
     },
     "network": { "$ref": "#/definitions/network" },
     "remote": { "$ref": "#/definitions/remote" },

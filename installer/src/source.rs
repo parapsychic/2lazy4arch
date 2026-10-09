@@ -52,6 +52,22 @@ fn download(url: &str) -> Result<PathBuf> {
 }
 
 impl Source {
+    /// The config's folder or URL folder, as base() wrote it.
+    pub fn from_base(base: &str) -> Source {
+        if is_url(base) {
+            Source::Url(base.to_string())
+        } else {
+            Source::Dir(PathBuf::from(base))
+        }
+    }
+
+    pub fn base(&self) -> String {
+        match self {
+            Source::Dir(dir) => dir.display().to_string(),
+            Source::Url(url) => url.clone(),
+        }
+    }
+
     /// Folder for LAZY_DIR: the config's folder, or where its files are downloaded.
     pub fn dir(&self) -> PathBuf {
         match self {

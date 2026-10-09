@@ -187,9 +187,9 @@ mod tests {
         let logger = Logger::new(false);
         let mut pacman = Pacman::new(&logger);
         // a package, a group, a provide, an AUR package, a typo
-        let wanted = ["firefox", "gnome", "libva-mesa-driver", "brave-bin", "not-a-package-xyz"];
-        assert_eq!(pacman.missing_from_repos(&wanted).unwrap(), ["brave-bin", "not-a-package-xyz"]);
-        assert_eq!(pacman.yay().keep_available(&wanted).unwrap(), ["firefox", "gnome", "libva-mesa-driver", "brave-bin"]);
+        let wanted = ["firefox", "gnome", "libva-mesa-driver", "zen-browser-bin", "not-a-package-xyz"];
+        assert_eq!(pacman.missing_from_repos(&wanted).unwrap(), ["zen-browser-bin", "not-a-package-xyz"]);
+        assert_eq!(pacman.yay().keep_available(&wanted).unwrap(), ["firefox", "gnome", "libva-mesa-driver", "zen-browser-bin"]);
         assert_eq!(pacman.skipped, ["not-a-package-xyz"]);
     }
 }

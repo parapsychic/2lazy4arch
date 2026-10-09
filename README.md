@@ -11,7 +11,7 @@ Click through a wizard, or describe the whole machine in one YAML file and let i
   - AMD: Mesa, or Mesa + AMDGPU PRO (proprietary Vulkan and AMF, AUR).
   - Intel: always Mesa (`vulkan-intel`, `intel-media-driver`).
 - **Desktop / window manager**, each booting to a login screen: DWM (Xorg, built from suckless git with dmenu and st), Hyprland (Wayland), KDE Plasma, GNOME, Xfce, LXDE, or none.
-- **Browser:** Firefox, LibreWolf, Chromium, Vivaldi, or from the AUR: Brave, Zen, Google Chrome.
+- **Browser:** Firefox, LibreWolf, Chromium, Epiphany (GNOME Web), Konqueror, qutebrowser, Falkon, or from the AUR: Zen, Google Chrome.
 - **Disks:** erase a disk, use the free space next to Windows, or pick partitions yourself (`cfdisk` is built in). Extra partitions can be mounted as they are.
 - **Users:** any number, admins or not, with zsh or fish, extra groups, SSH keys (or your GitHub keys), autologin. Root can stay locked.
 - **Extras:** SSH, Tailscale, VNC, Docker and Compose, multilib, extra pacman and AUR packages.
@@ -58,8 +58,10 @@ Run `2lazy4arch` with no arguments. The sidebar shows where you are and what you
 - In forms, `tab` or `↑↓` moves between fields and `enter` confirms.
 - Nothing is written to disk until you press `y` on the review screen. The exception is `cfdisk`, which saves as you go.
 
+After `y`, the install runs inside the TUI: its output in a terminal frame (pacman's own progress bars included), the current task, an overall progress bar and the elapsed time. `pgup`/`pgdn` scroll back through the output, anything you type goes to the installer (it may ask whether to skip packages that don't exist), and `ctrl+c` aborts. Once it's done, `q` leaves.
+
 The steps:
-1. Partitioning: erase a disk, use its free space, or edit it in cfdisk and pick the EFI, root and home partitions
+1. Partitioning: pick a disk to erase, use its free space or edit in cfdisk, or continue and pick the EFI, root and home partitions
 2. Other mounts, swap, mirrors, timezone, locale
 3. Your user and root, your shell, more users
 4. Bootloader, admin tool, NVIDIA and AMD drivers (only when that GPU is there)
@@ -109,7 +111,7 @@ Before anything happens:
    - `listen: tailscale` has Tailscale turned on, and VNC has a desktop and a password
    - the mirror country, timezone, locale and network interfaces exist, and wifi connections have a wifi card
    - every file named in the config can be read
-3. **Preview.** A review screen shows what will happen: disks to erase and format, users, drivers, network, remote access, packages, Docker, hooks. `y` installs, `esc` quits with nothing changed.
+3. **Preview.** A review screen shows what will happen: disks to erase and format, users, drivers, network, remote access, packages, Docker, hooks. `y` installs inside the TUI, like the wizard; `esc` quits with nothing changed. With `--no-confirm` there's no TUI at all, just the install's output.
 
 Then, in order:
 1. Get online with your connections, unless the ISO already is
