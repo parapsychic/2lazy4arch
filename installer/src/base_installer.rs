@@ -3,30 +3,40 @@ use std::{fs::OpenOptions, io::Write};
 use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
-use crate::utils::get_processor_make;
+use crate::{pacman::Pacman, utils::get_processor_make};
+
+/// What pacstrap installs.
+pub fn base_packages() -> Vec<&'static str> {
+    let mut packages = vec!["base", "linux", "linux-firmware", "neovim", "reflector"];
+    match get_processor_make().as_deref() {
+        Some("amd") => packages.push("amd-ucode"),
+        Some("intel") => packages.push("intel-ucode"),
+        _ => {}
+    }
+    packages
+}
 
 /* This module contains all the utility fns for smaller base installation. */
 pub struct BaseInstaller<'a> {
     shell: Shell<'a>,
+    pacman: Pacman<'a>,
 }
 
 impl<'a> BaseInstaller<'a> {
     pub fn new<'b>(logger: &'b Logger) -> BaseInstaller<'b> {
         let shell = Shell::new("Base Installer", logger);
-        BaseInstaller { shell }
+        BaseInstaller { shell, pacman: Pacman::new(logger) }
     }
 
     /// Installs the base packages
     pub fn base_packages_install(&mut self) -> Result<()> {
-        self.shell.log(&"Installing base packages.");
+        self.shell.log("Installing base packages.");
+        let packages = self.pacman.keep_available(&base_packages())?;
 
-        let package_cmd = if let Some(p) = get_processor_make() {
-            format!("-K /mnt base linux linux-firmware {}-ucode neovim reflector", p)
-        } else {
-            String::from("-K /mnt base linux linux-firmware neovim reflector")
-        };
-
-        match self.shell.run_and_wait_with_args("pacstrap", &package_cmd) {
+        match self
+            .shell
+            .run_and_wait_with_args("pacstrap", &format!("-K /mnt {}", packages.join(" ")))
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.shell.log(&format!(
@@ -40,7 +50,7 @@ impl<'a> BaseInstaller<'a> {
 
     /// Generates and Writes fstab configuration.
     pub fn genfstab(&mut self) -> Result<()> {
-        self.shell.log(&"Generating fstab.");
+        self.shell.log("Generating fstab.");
         let output = self.shell.run_with_args("genfstab", "-U /mnt")?;
 
         let mut fstab = match OpenOptions::new()

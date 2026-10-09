@@ -1,219 +1,105 @@
-use std::path::PathBuf;
+use std::fs;
 
 use anyhow::Result;
 use base_installer::BaseInstaller;
+use config::{Config, Desktop};
 use essentials::Essentials;
 use filesystem_tasks::Filesystem;
 use pacman::Pacman;
-use utils::{write_to_file, INSTALL_SUCCESS_FLAG};
+use shell_iface::logger::Logger;
+use utils::{write_to_file, AUR_QUEUE, INSTALL_SUCCESS_FLAG};
 
 pub mod base_installer;
+pub mod config;
 pub mod essentials;
 pub mod filesystem_tasks;
 pub mod pacman;
-pub mod partition_table;
 pub mod post_install;
 pub mod utils;
 
-pub fn install(
-    filesystem: &mut Filesystem,
-    base_installer: &mut BaseInstaller,
-    essentials: &mut Essentials,
-    pacman: &mut Pacman,
-    selected_reflector_country: &str,
-    selected_timezone: &str,
-    selected_locale: &str,
-    selected_encoding: &str,
-    swap_size: usize,
-    username: &str,
-    password: &str,
-    root_password: &str,
-    hostname: &str,
-) {
-    println!("Runnning reflector");
-    pacman.run_reflector(&selected_reflector_country).unwrap();
+/// Where part 1 leaves a copy of this binary for part 2.
+pub const INSTALLED_BINARY: &str = "/usr/local/bin/2lazy4arch";
 
-    println!("Setting up filesystem");
-    match install_filesystem(filesystem) {
-        Ok(_) => {}
-        Err(e) => {
-            filesystem.try_unmount();
-            println!("Installing filesystem failed");
-            let _ = write_to_file("log.txt", &e.to_string());
-            return;
-        }
+/// Ranks mirrors, syncs, and returns the packages part 1 would install that aren't
+/// in the repos. Touches nothing on disk, so call it before install().
+pub fn check_packages(logger: &Logger, cfg: &Config) -> Result<Vec<String>> {
+    let mut pacman = Pacman::new(logger);
+    step("Ranking mirrors");
+    if let Err(e) = pacman.run_reflector(&cfg.mirror_country) {
+        println!("reflector failed ({e}), keeping the current mirrorlist.");
     }
+    pacman.update_mirrors()?;
 
-    println!("Doing a base install");
-    match install_base(base_installer) {
-        Ok(_) => {}
-        Err(e) => {
-            filesystem.try_unmount();
-            println!("Installing base failed");
-            let _ = write_to_file("log.txt", &e.to_string());
-            return;
-        }
-    }
-
-    println!("Setting up the essentials");
-    match install_essentials(
-        essentials,
-        selected_timezone,
-        selected_locale,
-        selected_encoding,
-        swap_size,
-        username,
-        password,
-        root_password,
-        hostname,
-        selected_reflector_country,
-    ) {
-        Ok(_) => {}
-        Err(e) => {
-            filesystem.try_unmount();
-            println!("Installing essentials failed");
-            let _ = write_to_file("log.txt", &e.to_string());
-            return;
-        }
-    }
-
-    match write_to_file(INSTALL_SUCCESS_FLAG, "true") {
-        Ok(_) => {}
-        Err(e) => {
-            filesystem.try_unmount();
-            eprintln!("Setting success flag failed");
-            let _ = write_to_file("log.txt", &e.to_string());
-            return;
-        }
-    };
-
-    // Construct the destination path
-    let destination_path = PathBuf::from(format!("/mnt/home/{}/installer", username));
-    // Get the name of the executable from std::env::args
-    let executable_name = match std::env::args().next() {
-        Some(x) => x,
-        None => {
-            eprintln!("Failed to get the executable name from arguments.");
-            let _ = write_to_file(
-                "log.txt",
-                "Failed to get the executable name from arguments.",
-            );
-            return;
-        }
-    };
-
-    // Perform the file copy operation
-    if let Err(e) = std::fs::copy(executable_name, &destination_path) {
-        eprintln!("Failed to copy the installer: {}", e);
-        eprintln!(
-            "Please copy the file manually to {}",
-            destination_path.display()
-        );
-        let _ = write_to_file(
-            "log.txt",
-            &format!("Failed to copy the executable. {}", &e.to_string()),
-        );
-        return;
-    }
-
-    println!(
-        "Successfully copied the executable to {}. 
-        \nPlease run the installer after rebooting to the installed system.
-        \nInstaller completed successfully.",
-        destination_path.display()
-    );
-    let _ = write_to_file(
-        "log.txt",
-        "Installer completed successfully."
-    );
+    step("Checking packages");
+    let mut packages = base_installer::base_packages();
+    packages.extend(Essentials::new(logger, cfg.bootloader, cfg.super_user_utility).packages());
+    packages.extend(cfg.packages().repo);
+    pacman.missing_from_repos(&packages)
 }
 
-fn install_filesystem(filesystem: &mut Filesystem) -> Result<()> {
-    // Format partitions
-    {
-        filesystem.format_partitions()?;
+/// Part 1: from partitions to a bootable system with drivers, desktop and browser.
+/// Packages that don't exist are skipped. Leaves the process chrooted in /mnt on success.
+pub fn install(filesystem: &mut Filesystem, logger: &Logger, cfg: &Config) -> Result<()> {
+    // Until we chroot, a failure can still unmount everything.
+    let result = install_base(filesystem, logger);
+    if result.is_err() {
+        filesystem.try_unmount();
     }
+    result?;
 
-    {
-        filesystem.mount_partitions()?;
-    }
+    install_system(logger, cfg)
+}
 
+fn install_base(filesystem: &mut Filesystem, logger: &Logger) -> Result<()> {
+    step("Formatting and mounting partitions");
+    filesystem.format_partitions()?;
+    filesystem.mount_partitions()?;
+
+    step("Installing the base system");
+    let mut base_installer = BaseInstaller::new(logger);
+    base_installer.base_packages_install()?;
+    base_installer.genfstab()?;
+
+    fs::copy(std::env::current_exe()?, format!("/mnt{INSTALLED_BINARY}"))?;
     Ok(())
 }
 
-fn install_base(base_installer: &mut BaseInstaller) -> Result<()> {
-    // Install base packages
-    {
-        base_installer.base_packages_install()?;
+fn install_system(logger: &Logger, cfg: &Config) -> Result<()> {
+    let mut essentials = Essentials::new(logger, cfg.bootloader, cfg.super_user_utility);
+    let packages = cfg.packages();
+
+    step("Entering the new system");
+    essentials.chroot()?;
+
+    step("Swap, timezone, locale, hostname");
+    essentials.initialize_swap(cfg.swap_gb)?;
+    essentials.set_timezones(&cfg.timezone)?;
+    essentials.gen_locale(&cfg.locale)?;
+    essentials.set_hostname(&cfg.hostname)?;
+    essentials.set_password("root", &cfg.root_password)?;
+
+    step("Installing drivers, desktop and apps");
+    essentials.install_essentials(&packages.repo, &packages.services)?;
+    if cfg.desktop == Desktop::Dwm {
+        essentials.install_dwm()?;
+    }
+    if cfg.nvidia_proprietary() {
+        essentials.remove_kms_hook()?;
     }
 
-    // generate fstab
-    {
-        base_installer.genfstab()?;
-    }
+    step("Installing the bootloader");
+    essentials.mkinitcpio()?;
+    essentials.install_bootloader()?;
 
-    Ok(())
+    step("Creating your user");
+    essentials.user_management(&cfg.username, &cfg.password)?;
+
+    if !packages.aur.is_empty() {
+        write_to_file(AUR_QUEUE, &packages.aur.join("\n"))?;
+    }
+    write_to_file(INSTALL_SUCCESS_FLAG, "true")
 }
 
-fn install_essentials(
-    essentials: &mut Essentials,
-    selected_timezone: &str,
-    selected_locale: &str,
-    selected_encoding: &str,
-    swap_size: usize,
-    username: &str,
-    password: &str,
-    root_password: &str,
-    hostname: &str,
-    selected_reflector_country: &str,
-) -> Result<()> {
-    {
-        println!("Entering chroot");
-        essentials.chroot()?;
-
-        {
-            println!("Initializing swap");
-            essentials.initialize_swap(swap_size)?;
-        }
-
-        {
-            println!("Setting timezones");
-            essentials.set_timezones(&selected_timezone)?;
-        }
-
-        {
-            println!("Setting locale");
-            essentials.gen_locale(&selected_locale, &selected_encoding)?;
-        }
-
-        {
-            println!("Setting hostname");
-            essentials.set_hostname(&hostname)?;
-        }
-
-        {
-            println!("Setting up root");
-            essentials.set_password("root", &root_password)?;
-        }
-
-        {
-            println!("Setting up packages");
-            essentials.install_essentials(selected_reflector_country, None)?;
-        }
-
-        {
-            println!("Setting up bootloader");
-            essentials.install_bootloader()?;
-            essentials.mkinitcpio()?;
-        }
-
-        {
-            println!("Setting up user");
-            essentials.user_management(&username, &password)?;
-        }
-
-        println!("Completed, exiting installer");
-    }
-
-    Ok(())
+fn step(msg: &str) {
+    println!("\n\x1b[1;36m==>\x1b[0m \x1b[1m{msg}\x1b[0m");
 }

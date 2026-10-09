@@ -13,13 +13,13 @@ impl Logger {
         Logger { is_debug}
     }
 
+    /// Always goes to shell_log.txt; printed only when is_debug
+    /// (stray prints would garble the TUI).
     pub fn debug(&self, origin: &str, msg: &str) {
-        if self.is_debug {
-            eprintln!("{}: {}", origin.to_uppercase(), msg);
-        }
-
         let content = format!("{}: {}", origin.to_uppercase(), msg);
-        println!("{}", content);
+        if self.is_debug {
+            println!("{}", content);
+        }
         let _ = append_to_file("shell_log.txt", &content);
     }
 }

@@ -1,100 +1,98 @@
-use std::io;
-
-use chrono::Local;
-use installer::{
-    post_install::{DesktopEnvironment, PostInstall},
-    utils::{append_to_file, write_to_file},
+use std::{
+    fs,
+    io::{self, Write},
+    process::ExitCode,
 };
+
+use installer::{post_install::PostInstall, utils::AUR_QUEUE};
+use nix::unistd::Uid;
 use shell_iface::logger::Logger;
 
-pub fn run_post_install() {
-    println!("Before starting, make sure you read through this:
-       1. For installing extra packages from pacman, make a text file and enter the path when prompted (eg. packages.txt)
-       2. For installing aur packages, do the same with another file (aur_packages.txt).
-       3. If you add the wrong name for any package, the installation will fail mid-way and leave a whole lot of mess. Make sure the package name is correct.
-       4. [IMPORTANT] If you are not ME, do not run the ParaPsychic-specific scripts. If you do not know what this is, then you should be good to go.
-       5. The entire process will not involve a TUI like the install section because I'm having trouble figuring out doing some stuff completely in the background/unattended.
-       6. Keep an eye out on the installation process.
-       7. I'm assuming you are running right after the installation. If not, this might mess up your system.
+/// Part 2: runs as your user on the installed system. Sets up yay, installs the AUR
+/// packages picked in part 1 and your own package lists. Plain CLI on purpose: sudo,
+/// makepkg and yay all want the terminal for prompts.
+pub fn run_post_install() -> ExitCode {
+    if Uid::effective().is_root() {
+        eprintln!("Run this as your normal user, not root. It uses sudo when it needs to.");
+        return ExitCode::FAILURE;
+    }
 
-       Example packages files are included in the repo.
-       As always, I'm not responsible for the damages :D
-       Aight, lets start.
-       ");
+    let queued: Vec<String> = fs::read_to_string(AUR_QUEUE)
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
 
-    let mut buffer = String::new();
-    let stdin = io::stdin();
+    println!("\x1b[1;36m2lazy4arch, part 2\x1b[0m");
+    if !queued.is_empty() {
+        println!("Queued from part 1 (AUR): {}", queued.join(" "));
+    }
+    println!("Package lists are text files with one package name per line (see examples/ in the repo).");
+    println!("Names that don't exist are skipped and listed at the end.");
+    println!("Keep an eye out for sudo password prompts.\n");
+
+    let packages = read_list("pacman package list (enter to skip): ");
+    let mut aur = queued;
+    aur.extend(read_list("AUR package list (enter to skip): "));
+
     let logger = Logger::new(true);
     let mut post_install = PostInstall::new(&logger);
+    let mut ok = true;
+    let mut report = |what: &str, result: anyhow::Result<()>| {
+        if let Err(e) = result {
+            ok = false;
+            eprintln!("\x1b[1;31mInstalling {what} failed:\x1b[0m {e:#}");
+        }
+    };
 
-    buffer.clear();
-    while buffer.trim() != "yes" {
-        println!("Type yes to continue...");
-        buffer.clear();
-        stdin.read_line(&mut buffer).unwrap();
+    report("packages", post_install.install_packages(&as_strs(&packages)));
+    report("AUR packages", post_install.install_aur(&as_strs(&aur)));
+    if std::env::args().any(|a| a == "parapsychic-mode") {
+        report("the ParaPsychic rice", post_install.misc_options());
     }
 
-    let _ = write_to_file("log.txt", &format!("Starting post install: {}", Local::now()));
-    let mut packages_file = String::new();
-    let mut aur_packages_file = String::new();
-    {
-        println!("Enter path to packages file: (Installer might fail if wrong path is entered.): ");
-        packages_file.clear();
-        stdin.read_line(&mut packages_file).unwrap();
-
+    if !post_install.skipped().is_empty() {
         println!(
-            "Enter path to AUR packages file: (Installer might fail if wrong path is entered.): "
+            "\n\x1b[1;33mThese weren't found and were skipped:\x1b[0m {}\nCheck the names on https://archlinux.org/packages or https://aur.archlinux.org.",
+            post_install.skipped().join(" ")
         );
-        aur_packages_file.clear();
-        stdin.read_line(&mut aur_packages_file).unwrap();
     }
+    if ok {
+        println!("\n\x1b[1;32mInstallation has finished. Enjoy!\x1b[0m");
+        ExitCode::SUCCESS
+    } else {
+        println!("\nSome steps failed, see above and shell_log.txt. Running 2lazy4arch again skips what's already installed.");
+        ExitCode::FAILURE
+    }
+}
 
-    match post_install.install_additionals(&packages_file, &aur_packages_file) {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = append_to_file("log.txt", &e.to_string());
-            println!("Installing packages has failed. Please check the log file");
+fn as_strs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
+}
+
+/// Asks for a package list file until it's readable or skipped. Ignores blank lines and # comments.
+fn read_list(prompt: &str) -> Vec<String> {
+    loop {
+        print!("{prompt}");
+        let _ = io::stdout().flush();
+        let mut path = String::new();
+        if io::stdin().read_line(&mut path).unwrap_or(0) == 0 {
+            return vec![];
         }
-    }
-
-    println!("Pick a Desktop Environment / Window Manager");
-    println!("No display manager will be installed. Please install and configure on your own.");
-    println!("Or launch it from the tty like a true chad");
-
-    println!("1. Gnome");
-    println!("2. KDE Plasma");
-    println!("3. Hyprland");
-
-    buffer.clear();
-    stdin.read_line(&mut buffer).unwrap();
-    let index: usize = buffer.trim().parse().unwrap_or(1);
-    let de: DesktopEnvironment;
-
-    match index {
-        1 => de = DesktopEnvironment::Gnome,
-        2 => de = DesktopEnvironment::KDE,
-        3 => de = DesktopEnvironment::Hyprland,
-        _ => de = DesktopEnvironment::Gnome,
-    }
-
-    match post_install.install_desktop(de) {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = append_to_file("log.txt", &e.to_string());
-            println!("Installing desktop has failed. Please check the log file");
+        let path = path.trim();
+        if path.is_empty() {
+            return vec![];
         }
-    }
-
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 && args.contains(&String::from("parapsychic-mode")) {
-        match post_install.misc_options() {
-            Ok(_) => {}
-            Err(e) => {
-                let _ = append_to_file("log.txt", &e.to_string());
-                println!("Installing misc options has failed. Please check the log file");
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                return content
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(String::from)
+                    .collect()
             }
+            Err(e) => println!("Can't read {path}: {e}"),
         }
     }
-
-    println!("Installation has finished. Enjoy!")
 }

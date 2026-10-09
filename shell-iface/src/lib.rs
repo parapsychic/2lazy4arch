@@ -209,7 +209,7 @@ impl<'a> Shell<'a> {
             self.set_last_command(cmd, &output.status, None, None);
             return Ok(output);
         }
-        let output = Command::new(cmd).output()?;
+        let output = Command::new(cmd).current_dir(dir).output()?;
 
         if !output.status.success() {
             return Err(anyhow!(
@@ -293,10 +293,13 @@ impl<'a> Shell<'a> {
         let status = Command::new(cmd).args(args_vec).status()?;
 
         if !status.success() {
+            self.log(&format!("`{cmd} {args}` failed with {status}"));
             return Err(anyhow!(
-                "{}: {} failed. Exited with non-zero exit code",
+                "{}: `{} {}` failed ({})",
                 self.identifier.to_uppercase(),
-                cmd
+                cmd,
+                args,
+                status
             ));
         }
 

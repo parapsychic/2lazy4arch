@@ -2,13 +2,20 @@
 A dead simple, fast and opinionated Arch Linux Installer, written in Rust.
 
 ## What to Expect?
-- File partitioning using `cfdisk`.
-- Reflector to sync pacman mirrors.
-- (1,2,4,8,16,32, 64) GB Swapfile instead of swap partition.
-- Yay as AUR package manager.
-- Gnome/KDE/Hyprland as Desktop Environment / Window Manager options
-- Sudo/Doas
-- Grub/SystemD Boot as Bootloader
+- A step-by-step TUI: partitioning with `cfdisk`, then mount points, mirrors, swap, timezone, locale, users, bootloader, drivers, desktop and browser, then a review screen before anything is touched.
+- Works on Intel and AMD CPUs (microcode is picked automatically) and on Intel, AMD and NVIDIA GPUs, including hybrid laptops.
+- Asks whether you want proprietary drivers:
+  - NVIDIA: `nvidia-open` (GTX 16xx / RTX and newer), legacy `nvidia-580xx` (GTX 9xx / 10xx, AUR) or `nouveau`. Hybrid laptops also get `nvidia-prime` (`prime-run`).
+  - AMD: Mesa, or Mesa + AMDGPU PRO (proprietary Vulkan and AMF, AUR).
+  - Intel: always Mesa (`vulkan-intel`, `intel-media-driver`).
+- Desktop / window manager, each booting to a login screen:
+  DWM (Xorg, built from suckless git with dmenu and st), Hyprland (Wayland), KDE Plasma, GNOME, Xfce, LXDE, or none.
+- Browser: Firefox, LibreWolf, Chromium, Vivaldi, or from the AUR: Brave, Zen, Google Chrome.
+- Reflector to rank pacman mirrors.
+- A swap file (none, 1 to 64 GB) instead of a swap partition.
+- Sudo/Doas, Grub (with os-prober for dual boot)/systemd-boot.
+- Yay as AUR helper (part 2).
+- UEFI only. The installer refuses to start the install when booted in BIOS mode.
 - The following programs:
 ```
 base
@@ -35,20 +42,22 @@ pipewire
 pipewire-pulse
 pipewire-jack
 pipewire-alsa
+wireplumber
 alsa-utils
+git
 cups
-  ```
+mesa + your GPU drivers
+```
 
 ## How To Use?
-This is a two-part installation process. 
+This is a two-part installation process.
 
-The first part installs till a bootable system. If this is all that you need, complete the part one of this guide.
+Part 1 installs a bootable system with your drivers, desktop and browser. If you picked nothing from the AUR, that's all you need.
 
-For the second part, you might need to set up some files.
+Part 2 runs after the first boot. It sets up yay, installs the AUR packages you picked in part 1, and anything listed in your own package files.
 
-### Part 1: Installing the base system
-The base installer partitions and mounts the filesystem, installs important packages and sets up the users and hostname.
-To run it as it is, use curl to download the release and run it. Replace the version with the release tag.
+### Part 1: Installing the system
+Boot the Arch ISO in UEFI mode, connect to the internet, then download a release and run it. Replace the version with the release tag.
 
 ```sh
 # curl -L https://github.com/parapsychic/2lazy4arch/releases/download/{release}/2lazy4arch \
@@ -61,76 +70,36 @@ chmod +x 2lazy4arch
 
 ./2lazy4arch
 ```
-Follow the onscreen instructions.
 
-The TUI is intuitive and also supports vim-style `jk` movements.
+Follow the steps. The sidebar shows where you are and what you picked.
+- `↑↓` (or `jk` on short lists) to move, `enter` to pick, `esc` to go back, `ctrl+c` to quit.
+- Long lists (mirrors, timezones, locales) filter as you type.
+- Nothing is formatted until you press `y` on the review screen. The exception is `cfdisk`, which writes partition changes when you save in it.
 
-Now that installation is successful, you should see either one of the following messages
-```
-# ERROR:
-Failed to get the executable name from arguments.
+Before touching the disks, it ranks mirrors and checks that every package it's about to install exists in the repos. Anything missing is listed, and you can stop there with nothing changed or continue without it.
 
-# ERROR:
-Failed to copy the installer.
-Please copy the file manually to /some/path
+When it's done, it prints `Installation finished.` and copies itself to `/usr/local/bin/2lazy4arch` in the new system. If it fails, the error is printed and every command it ran is in `shell_log.txt`.
 
-# SUCCESS:
-Successfully copied the executable to /some/path. 
-Please run the installer after rebooting to the installed system.
-Installer completed successfully.
-
-```
-Dont worry about these error messages if you don't intend to follow step 2.
-
-Your installation is successful.
-
-If you don't intend to follow step 2 of this installation, you can safely reboot.
-
-Otherwise, continue with step 2.
+Reboot.
 
 ### Part 2: Post Installation
-If you got the success message from last step, an installer file will be present in your `home` folder.
-
-If not, now is your chance to copy the 2Lazy4Arch executable to your `home` folder.
-
+Log in as your user (not root) and run:
 ```sh
-cp 2lazy4arch /mnt/home/{username}/installer
+2lazy4arch
 ```
-> If you accidentally rebooted in the last step, just download the installer again
-> ```sh
-> curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch \
->  --output 2lazy4arch
-> ```
+It shows the AUR packages queued from part 1, then asks for two optional files (press enter to skip either):
+- a package list installed with `pacman`
+- a package list installed with `yay`
 
-Before we begin, we should create two files. 
+Package lists have one package name per line; blank lines and `#` comments are ignored. Names that aren't in the repos (or, for the yay list, the AUR either) are skipped instead of failing the whole install, and listed at the end. See the [example files](https://github.com/parapsychic/2lazy4arch/tree/main/examples).
 
-Name them whatever you like. For this example, I'll be calling the `packages.txt` and `aur_packages.txt`.
-
-You can refer to the [example files](https://github.com/parapsychic/2lazy4arch/tree/main/examples).
-
-These files expect valid package names separated by a newline.
-
-Packages in `packages.txt` will be installed using `pacman`.
-
-Packages in `aur_packages.txt` will be installed using `yay`.
-
-Start installation by running the installer file.
-```sh
-./installer
-```
-This has no TUI as there were some hiccups along the way with the terminal input/output piping, so this will be completely CLI based.
-
-When prompted, enter the relative path to the packages files.
-
-Keep an eye-out for prompts to enter the password.
-
-After completing the installer will show a message: "Installation has finished. Enjoy!".
-
-See [How To Extend?](#how-to-extend) to know how to run post-install hooks/scripts
+Keep an eye out for sudo password prompts. When everything worked it prints `Installation has finished. Enjoy!`. Running it again is safe: anything already installed is skipped.
 
 #### [Note to me] ParaPsychic Mode
-To run my specific settings, run installer after base installation with the `parapsychic-mode` argument.
-
+To run my specific settings (dotfiles, my dwm/dmenu builds, multilib, pacman candy, touchpad config), run part 2 with the `parapsychic-mode` argument:
+```sh
+2lazy4arch parapsychic-mode
+```
 
 #### Compiling
 Install rust by following this [guide](https://www.rust-lang.org/learn/get-started).
@@ -140,36 +109,20 @@ Then, clone this repo and compile it.
 git clone https://github.com/parapsychic/2lazy4arch.git
 cd 2lazy4arch
 cargo build --release
+cargo test
 ```
 The compiled binary will be at `target/release/toolazy4arch`. The naming is different as rust does not allow first character to be a digit.
 
 
 ## How To Extend?
 ### Packages
-2Lazy4Arch expects you to make some files before running the post installer. Refer to the [How-To-Use?](#how-to-use) section to learn more.
+Part 2 takes your own package lists. Refer to the [How-To-Use?](#how-to-use) section to learn more.
+
+### Drivers, desktops, browsers
+They all map to packages in `Config::packages()` in [installer/src/config.rs](installer/src/config.rs). The choices shown in the TUI live in [tui/src/app.rs](tui/src/app.rs).
 
 ### Ricing
-To run your own ricing scripts after installation:
-
-Go to `installer/src/utils` and change the RICE_SCRIPT_URL
-
-The script is downloaded using `curl`, so be sure to host it somewhere.
-
-After that, [compile](#compiling) and run the program with the argument `parapsychic-mode`.
-```sh
-./2lazy4arch parapsychic-mode
-```
-You can change the argument name, but I made this specifically for running my scripts.
-
-## Screenshots:
-![2024-06-24_00-50](https://github.com/parapsychic/2lazy4arch/assets/63157522/d3b8e8b0-4509-47f1-8a3f-7d64ced6eedb)
-
-![2024-06-24_00-51](https://github.com/parapsychic/2lazy4arch/assets/63157522/e391206a-e384-4dd2-9ff6-7c0d85d9b845)
-
-![2024-06-24_00-52_1](https://github.com/parapsychic/2lazy4arch/assets/63157522/4abdc61d-c80e-4d6c-a233-1ad944b5f1ec)
-
-![2024-06-24_00-56](https://github.com/parapsychic/2lazy4arch/assets/63157522/16601791-0617-4647-bde0-2a4d73f556c6)
-
+`parapsychic-mode` is `PostInstall::misc_options` in [installer/src/post_install.rs](installer/src/post_install.rs). To rice with your own dotfiles, change `DOTFILES_REPO`, `GIT_NAME` and `GIT_EMAIL` at the top of that file and edit the steps, then [compile](#compiling).
 
 ## Problems?
 It Just Works<sup>TM</sup>  

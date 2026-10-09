@@ -1,25 +1,32 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use shell_iface::{logger::Logger, Shell};
-use std::{fs, os::unix};
+use std::{
+    fs,
+    os::unix::{self, fs::PermissionsExt},
+};
 
 use crate::{
     pacman::Pacman,
-    utils::{append_to_file, get_processor_make, get_uuid_root, write_to_file},
+    utils::{append_to_file, get_uuid_root, write_to_file},
 };
 
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum Bootloader {
+    #[default]
     Grub,
     SystemDBoot,
 }
 
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum SuperUserUtility {
+    #[default]
     Sudo,
     Doas,
 }
 
 /// Essentials basically installs arch to be a bootable/usable state.
 /// This is same as the install.sh
-/// Essentials must be the last to run before program exits. 
+/// Essentials must be the last to run before program exits.
 /// Reason in chroot function
 pub struct Essentials<'a> {
     is_chroot: bool,
@@ -50,185 +57,145 @@ impl<'a> Essentials<'a> {
         }
     }
 
+    fn ensure_chroot(&self, what: &str) -> Result<()> {
+        if !self.is_chroot {
+            self.shell.log(&format!("Cannot {what}. Not in chroot."));
+            bail!("Cannot {what}. Not in chroot.");
+        }
+        Ok(())
+    }
+
     /// chroot into the system
     /// It is imperative that this should be called first before executing any other fns.
     /// Instead of calling arch-chroot, chroot is being called directly.
     /// Followed instructions from [here](https://wiki.archlinux.org/title/Chroot#Using_chroot)
     /// Since I can't un-chroot once we're inside chroot,
     /// we need to make sure this struct's functions are run at the very end.
-    /// This behavior is consistent with how chroot works in Unix-like systems: 
+    /// This behavior is consistent with how chroot works in Unix-like systems:
     /// once a process is chrooted, it cannot simply "unchroot" itself.
     /// So, either refactor the whole code to include forking process,
-    /// or just rely on this process to exit and 
+    /// or just rely on this process to exit and
     /// thus send the user back to un-chrooted environment.
     pub fn chroot(&mut self) -> Result<()> {
         self.shell.log("Entering chroot.");
-        self.shell
-            .run_with_args("mount", "-t proc /proc /mnt/proc/")?;
-        self.shell
-            .run_with_args("mount", "-t sysfs /sys /mnt/sys/")?;
-        self.shell
-            .run_with_args("mount", "-o bind /dev /mnt/dev/")?;
-        self.shell
-            .run_with_args("mount", "-o bind /run /mnt/run/")?;
+        self.shell.run_with_args("mount", "-t proc /proc /mnt/proc/")?;
+        self.shell.run_with_args("mount", "-t sysfs /sys /mnt/sys/")?;
+        self.shell.run_with_args("mount", "-o bind /dev /mnt/dev/")?;
+        self.shell.run_with_args("mount", "-o bind /run /mnt/run/")?;
         self.shell.run_with_args(
             "mount",
             "-o bind /sys/firmware/efi/efivars /mnt/sys/firmware/efi/efivars/",
         )?;
         fs::copy("/etc/resolv.conf", "/mnt/etc/resolv.conf")?;
-        std::os::unix::fs::chroot("/mnt")?;
+        unix::fs::chroot("/mnt")?;
         std::env::set_current_dir("/")?;
-
-        self.shell.log("Entered chroot.");
-
-        self.shell.log("Sourcing profiles from chroot.");
-        // this seems to be failing often.
-        let _ = self.shell.run_with_args("source", "/etc/profile");
         self.is_chroot = true;
 
-        self.shell.log("Completed entering chroot.");
+        self.shell.log("Entered chroot.");
         Ok(())
     }
 
-    /// Sets the swap size.
-    /// Size is in GB
-    /// Should be run in a multithreaded manner. There is no point in waiting for this to complete.
-    /// But, must panic if the operation fails as that would affect the whole system.
+    /// Creates a swap file of `size` GB. 0 skips it.
     pub fn initialize_swap(&mut self, size: usize) -> Result<()> {
-        self.shell.log("Initializing Swap.");
-        if !self.is_chroot {
-            self.shell.log("Cannot initialize swap, not in chroot.");
-            return Err(anyhow!("Cannot initialize swap, not in chroot."));
+        self.ensure_chroot("initialize swap")?;
+        if size == 0 {
+            self.shell.log("Swap disabled.");
+            return Ok(());
         }
 
-        let multiplied_size = size * 1024;
-        self.shell.log(&format!("Size: {} MB", multiplied_size));
-        self.shell.log("Creating Swap Partition");
-        let status = self.shell.run_and_wait_with_args(
-            "dd",
-            &format!(
-                "if=/dev/zero of=/swapfile bs=1M count={} status=progress",
-                multiplied_size
-            ),
+        self.shell.log(&format!("Creating a {size} GB swap file."));
+        // allocates instead of writing zeroes like dd, so it's instant
+        self.shell.run_and_wait_with_args(
+            "mkswap",
+            &format!("-U clear --size {size}G --file /swapfile"),
         )?;
-
-        if !status.success() {
-            self.shell.log("dd failed. Exited with non-zero status.");
-            return Err(anyhow!("Could not create swap file."));
-        }
-
-        self.shell
-            .run_and_wait_with_args("chmod", "600 /swapfile")?;
-        self.shell.run_and_wait_with_args("mkswap", "/swapfile")?;
-        self.shell.run_and_wait_with_args("swapon", "/swapfile")?;
-
-        self.shell.log("Appending swap to fstab.");
-        append_to_file("/etc/fstab", "/swapfile none  swap defaults 0 0")
+        append_to_file("/etc/fstab", "/swapfile none swap defaults 0 0")
     }
 
     /// Sets the timezone.
-    /// Expects a valid Timezone from zoneinfo
-    /// /usr/share/zoneinfo/Asia/Kolkata
+    /// Expects a valid Timezone from zoneinfo, eg: Asia/Kolkata
     pub fn set_timezones(&mut self, timezone: &str) -> Result<()> {
-        self.shell.log("Setting timezones.");
-        if !self.is_chroot {
-            self.shell.log("Setting timezones failed. Not in chroot.");
-            return Err(anyhow!("Setting timezones failed. Not in chroot."));
-        }
-
+        self.ensure_chroot("set timezone")?;
         self.shell.log("Synchronizing Timezones");
-        unix::fs::symlink(
-            format!("/usr/share/zoneinfo/{}", timezone),
-            "/etc/localtime",
-        )?;
+        let _ = fs::remove_file("/etc/localtime");
+        unix::fs::symlink(format!("/usr/share/zoneinfo/{timezone}"), "/etc/localtime")?;
         self.shell.run_and_wait_with_args("hwclock", "--systohc")?;
         Ok(())
     }
 
     /// Generates locale.
-    /// Expects a valid locale. Does not check.
-    pub fn gen_locale(&mut self, locale: &str, encoding: &str) -> Result<()> {
+    /// Expects a line from /etc/locale.gen, eg: "en_US.UTF-8 UTF-8"
+    pub fn gen_locale(&mut self, locale: &str) -> Result<()> {
+        self.ensure_chroot("set locale")?;
         self.shell.log("Generating Locale");
 
-        if !self.is_chroot {
-            self.shell.log("Setting locale failed. Not in chroot.");
-            return Err(anyhow!("Setting locale failed. Not in chroot."));
-        }
-
-        self.shell.log("Appending locale to fstab.");
-
-        append_to_file("/etc/locale.gen", &format!("{} {}", locale, encoding))?;
+        let lang = locale.split_whitespace().next().ok_or_else(|| anyhow!("Empty locale"))?;
+        append_to_file("/etc/locale.gen", locale)?;
         self.shell.run_and_wait("locale-gen")?;
-        append_to_file("/etc/locale.conf", &format!("LANG={}", locale))
+        write_to_file("/etc/locale.conf", &format!("LANG={lang}\n"))
     }
 
     /// Sets the hostname and the hosts configuration
     pub fn set_hostname(&mut self, hostname: &str) -> Result<()> {
+        self.ensure_chroot("set hostname")?;
         self.shell.log("Setting hostname");
 
-        if !self.is_chroot {
-            self.shell.log("Setting hostname failed. Not in chroot.");
-            return Err(anyhow!("Setting hostname failed. Not in chroot."));
-        }
-
-        write_to_file("/etc/hostname", hostname)?;
-        self.shell.log("Setting hosts");
+        write_to_file("/etc/hostname", &format!("{hostname}\n"))?;
         append_to_file(
             "/etc/hosts",
-            &format!(
-                "127.0.0.1\tlocalhost\n::1\tlocalhost\n127.0.1.1\t{}.localdomain\t{}",
-                hostname, hostname
-            ),
-        )?;
-
-        Ok(())
+            &format!("127.0.0.1\tlocalhost\n::1\tlocalhost\n127.0.1.1\t{hostname}.localdomain\t{hostname}"),
+        )
     }
 
     /// Runs mkinicpio
     pub fn mkinitcpio(&mut self) -> Result<()> {
-        self.shell.log("Running mkinitcpio");
-
-        if !self.is_chroot {
-            self.shell.log("Cannot run mkinitcpio. Not in chroot.");
-            return Err(anyhow!("Cannot run mkinitcpio. Not in chroot."));
-        }
-
+        self.ensure_chroot("run mkinitcpio")?;
         self.shell.run_and_wait_with_args("mkinitcpio", "-P")?;
-        self.shell.log("Completed mkinitcpio");
-
         Ok(())
+    }
+
+    /// Keeps nouveau out of the initramfs so the proprietary NVIDIA driver can load.
+    /// Run mkinitcpio afterwards.
+    pub fn remove_kms_hook(&mut self) -> Result<()> {
+        self.ensure_chroot("edit mkinitcpio.conf")?;
+        let conf = fs::read_to_string("/etc/mkinitcpio.conf")?;
+        write_to_file("/etc/mkinitcpio.conf", &conf.replace(" kms ", " "))
     }
 
     /// set up password
     pub fn set_password(&mut self, user: &str, password: &str) -> Result<()> {
-        self.shell.log(&format!("Setting password for {}", user));
+        self.ensure_chroot("set password")?;
+        self.shell.log(&format!("Setting password for {user}"));
 
-        if !self.is_chroot {
-            self.shell.log("Cannot set password. Not in chroot.");
-            return Err(anyhow!("Cannot set password. Not in chroot."));
+        let status = self
+            .shell
+            .spawn_with_piped_input("chpasswd", &format!("{user}:{password}"))?
+            .wait()?;
+        if !status.success() {
+            bail!("Could not set the password for {user}");
         }
-
-        self.shell
-            .spawn_with_piped_input(&"chpasswd", &format!("{}:{}", user, password))?;
-        self.shell.log("Password set successfully.");
-
         Ok(())
     }
 
-    /// installs the required programs
-    pub fn install_essentials(
-        &mut self,
-        reflector_country: &str,
-        extra_programs: Option<Vec<&str>>,
-    ) -> Result<()> {
+    /// Installs packages() plus `extra_programs`, and enables `services`.
+    pub fn install_essentials(&mut self, extra_programs: &[&str], services: &[&str]) -> Result<()> {
+        self.ensure_chroot("install essential packages")?;
         self.shell.log("Starting essentials package install");
 
-        if !self.is_chroot {
-            self.shell
-                .log("Cannot install essential packages. Not in chroot.");
-            return Err(anyhow!("Cannot install essential packages. Not in chroot."));
-        }
+        let mut packages = self.packages();
+        packages.extend(extra_programs);
+        // pacstrap already copied the ranked mirrorlist
+        self.pacman.install(&packages)?;
 
+        self.shell.log("Enabling Services");
+        for service in ["NetworkManager", "bluetooth"].iter().chain(services) {
+            self.shell.run_and_wait_with_args("systemctl", &format!("enable {service}"))?;
+        }
+        Ok(())
+    }
+
+    /// The programs every install gets.
+    pub fn packages(&self) -> Vec<&'static str> {
         let mut essential_packages = vec![
             "efibootmgr",
             "os-prober",
@@ -248,37 +215,39 @@ impl<'a> Essentials<'a> {
             "pipewire-pulse",
             "pipewire-jack",
             "pipewire-alsa",
+            "wireplumber",
             "alsa-utils",
             "git",
             "cups",
         ];
-
-        if let Some(extras) = extra_programs {
-            essential_packages.extend(extras)
+        if let SuperUserUtility::Doas = self.super_user_utility {
+            // sudo is always there, base-devel depends on it
+            essential_packages.push("opendoas");
         }
-
-        essential_packages.push(match self.super_user_utility {
-            SuperUserUtility::Sudo => "sudo",
-            SuperUserUtility::Doas => "opendoas",
-        });
-
         if let Bootloader::Grub = self.bootloader {
             essential_packages.push("grub");
         }
+        essential_packages
+    }
 
-        self.pacman.run_reflector(reflector_country)?;
-        self.pacman.install(essential_packages)?;
-        self.shell.log("Completed essentials package install");
-
-        self.shell.log("Enabling Services");
-        self.shell
-            .run_and_wait_with_args("systemctl", "enable NetworkManager")?;
-        self.shell
-            .run_and_wait_with_args("systemctl", "enable bluetooth")?;
-
-        self.shell.log("Completed enabling Services");
-
-        Ok(())
+    /// Builds dwm, dmenu and st from suckless git into /usr/local, sources stay in
+    /// /usr/local/src for editing config.h. Login goes through lightdm.
+    pub fn install_dwm(&mut self) -> Result<()> {
+        self.ensure_chroot("install dwm")?;
+        for tool in ["dwm", "dmenu", "st"] {
+            let dir = format!("/usr/local/src/{tool}");
+            let _ = fs::remove_dir_all(&dir);
+            self.shell.run_and_wait_with_args(
+                "git",
+                &format!("clone --depth 1 https://git.suckless.org/{tool} {dir}"),
+            )?;
+            self.shell.run_and_wait_with_args("make", &format!("-C {dir} clean install"))?;
+        }
+        fs::create_dir_all("/usr/share/xsessions")?;
+        write_to_file(
+            "/usr/share/xsessions/dwm.desktop",
+            "[Desktop Entry]\nEncoding=UTF-8\nName=Dwm\nComment=the dynamic window manager\nExec=/usr/local/bin/dwm\nIcon=dwm\nType=XSession\n",
+        )
     }
 
     pub fn install_bootloader(&mut self) -> Result<()> {
@@ -288,141 +257,66 @@ impl<'a> Essentials<'a> {
         }
     }
 
-    /// Installs and configures grub
-    /// Shouldn't be called from outside
-    /// Only one bootloader can be installed
+    /// Installs and configures grub, with os-prober so other OSes show up.
     fn install_grub(&mut self) -> Result<()> {
+        self.ensure_chroot("install grub")?;
         self.shell.log("Installing Grub as the Bootloader");
 
-        if !self.is_chroot {
-            self.shell.log("Cannot install grub. Not in chroot.");
-            return Err(anyhow!("Cannot install grub. Not in chroot."));
-        }
-
-        self.shell
-            .log("os-prober is disabled, windows won't be recognized");
-        self.shell
-            .log("run grub-mkconfig again with edited grub file");
+        append_to_file("/etc/default/grub", "GRUB_DISABLE_OS_PROBER=false\n")?;
         self.shell.run_and_wait_with_args(
             "grub-install",
             "--target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB",
         )?;
-        self.shell
-            .run_and_wait_with_args("grub-mkconfig", "-o /boot/grub/grub.cfg")?;
+        self.shell.run_and_wait_with_args("grub-mkconfig", "-o /boot/grub/grub.cfg")?;
         Ok(())
     }
 
     /// Installs and configures systemd-boot
-    /// Shouldn't be called from outside
-    /// Only one bootloader can be installed
-    /// Does not support  Secure boot. TODO
+    /// Does not support Secure boot. TODO
     fn install_systemdboot(&mut self) -> Result<()> {
+        self.ensure_chroot("install systemd-boot")?;
         self.shell.log("Installing SystemD Boot as the Bootloader");
-        // TODO: Show this to user instead of logging.
         self.shell.log("This mode does not support secure boot. If you have secure boot installed, you might want to set up [signing the bootloader](https://wiki.archlinux.org/title/Systemd-boot#Signing_for_Secure_Boot).");
 
-        if !self.is_chroot {
-            self.shell
-                .log("Cannot install systemd-boot. Not in chroot.");
-            return Err(anyhow!("Cannot install systemd-boot. Not in chroot."));
-        }
-
         self.shell.run_and_wait_with_args("bootctl", "install")?;
-
         self.shell
             .run_and_wait_with_args("systemctl", "enable systemd-boot-update.service")?;
         write_to_file(
             "/boot/loader/loader.conf",
-            "default  arch.conf
-timeout  4
-console-mode max
-editor   no",
+            "default  arch.conf\ntimeout  4\nconsole-mode max\neditor   no\n",
         )?;
 
+        // No ucode initrd: mkinitcpio's microcode hook embeds it in the initramfs.
+        // No fallback entry: Arch's preset doesn't build the fallback image anymore.
         let uuid = get_uuid_root()?;
-        let default_conf;
-        let fallback_conf;
-
-        // bad code, idc.
-        // basically decides whether to load a ucode or not.
-        if let Some(processor) = get_processor_make() {
-            default_conf = format!(
-                "title   Arch Linux 
-linux   /vmlinuz-linux
-initrd  /{}-ucode.img
-initrd  /initramfs-linux.img
-options root=UUID={} rw",
-                processor, uuid
-            );
-            fallback_conf = format!(
-                "title   Arch Linux (fallback initramfs)
-linux   /vmlinuz-linux
-initrd  /{}-ucode.img
-initrd  /initramfs-linux-fallback.img
-options root=UUID={} rw",
-                processor, uuid
-            );
-        } else {
-            default_conf = format!(
-                "title   Arch Linux 
-linux   /vmlinuz-linux
-initrd  /initramfs-linux.img
-options root=UUID={} rw",
-                uuid
-            );
-            fallback_conf = format!(
-                "title   Arch Linux (fallback initramfs)
-linux   /vmlinuz-linux
-initrd  /initramfs-linux-fallback.img
-options root=UUID={} rw",
-                uuid
-            );
-        }
-
-        // write default entry
-        write_to_file("/boot/loader/entries/arch.conf", &default_conf)?;
-
-        // write default entry
-        write_to_file("/boot/loader/entries/arch-fallback.conf", &fallback_conf)?;
-        Ok(())
+        write_to_file(
+            "/boot/loader/entries/arch.conf",
+            &format!("title   Arch Linux\nlinux   /vmlinuz-linux\ninitrd  /initramfs-linux.img\noptions root=UUID={uuid} rw\n"),
+        )
     }
 
-    /// Adds a new user, sets permissions, installs and sets up the super user utility.
+    /// Adds a new user, sets permissions and sets up the super user utility.
     pub fn user_management(&mut self, user: &str, password: &str) -> Result<()> {
+        self.ensure_chroot("set up the user")?;
         self.shell.log("Setting up User Management");
 
-        if !self.is_chroot {
-            self.shell
-                .log("Cannot install essential packages. Not in chroot.");
-            return Err(anyhow!("Cannot install essential packages. Not in chroot."));
-        }
-
         self.shell
-            .run_and_wait_with_args("useradd", &format!("-mG wheel {}", user))?;
+            .run_and_wait_with_args("useradd", &format!("-mG wheel {user}"))?;
         self.set_password(user, password)?;
-        self.shell.log("Password set successfully.");
 
-        self.shell.log("Adding wheel to sudoers");
+        // sudo is always installed (base-devel), so wheel always gets it.
+        // makepkg and yay rely on it in part 2.
+        write_to_file("/etc/sudoers.d/10-wheel", "%wheel ALL=(ALL:ALL) ALL\n")?;
+        fs::set_permissions("/etc/sudoers.d/10-wheel", fs::Permissions::from_mode(0o440))?;
 
-        match self.super_user_utility {
-            // I think sudo is already installed during the base build
-            // if not it will be installed during some package install as a dependency
-            SuperUserUtility::Sudo => {
-                self.shell.run_and_wait_with_args(
-                    "sed",
-                    "-i \"82 i %wheel ALL=(ALL) ALL\" /etc/sudoers",
-                )?;
-            }
-            SuperUserUtility::Doas => {
-                self.pacman.install(vec!["opendoas"])?;
-                write_to_file(
-                    "/etc/doas.conf",
-                    "permit setenv { XAUTHORITY LANG LC_ALL } persist :wheel as root",
-                )?;
-                unix::fs::symlink("/usr/bin/doas", "/usr/bin/sudo")?;
-            }
+        if let SuperUserUtility::Doas = self.super_user_utility {
+            // doas rejects a config without a trailing newline
+            write_to_file(
+                "/etc/doas.conf",
+                "permit setenv { XAUTHORITY LANG LC_ALL } persist :wheel as root\n",
+            )?;
+            fs::set_permissions("/etc/doas.conf", fs::Permissions::from_mode(0o400))?;
         }
-
         Ok(())
     }
 }
