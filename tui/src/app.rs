@@ -7,7 +7,7 @@ use installer::{
     },
     essentials::{Bootloader, SuperUserUtility},
     filesystem_tasks::Filesystem,
-    system::{lsblk, BlockDevice, GpuVendor, System},
+    system::{human_size, lsblk, BlockDevice, GpuVendor, System},
     utils::is_valid_mount_point,
     validate,
 };
@@ -103,12 +103,14 @@ pub const DESKTOPS: [(Desktop, &str); 7] = [
     (Desktop::Lxde, "LXDE"),
     (Desktop::None, "None - console only"),
 ];
-pub const BROWSERS: [(Browser, &str); 8] = [
+pub const BROWSERS: [(Browser, &str); 10] = [
     (Browser::Firefox, "Firefox"),
     (Browser::Librewolf, "LibreWolf"),
     (Browser::Chromium, "Chromium"),
-    (Browser::Vivaldi, "Vivaldi"),
-    (Browser::Brave, "Brave - AUR"),
+    (Browser::Epiphany, "Epiphany - GNOME Web"),
+    (Browser::Konqueror, "Konqueror"),
+    (Browser::Qutebrowser, "qutebrowser - keyboard driven"),
+    (Browser::Falkon, "Falkon"),
     (Browser::Zen, "Zen - AUR"),
     (Browser::Chrome, "Google Chrome - AUR"),
     (Browser::None, "None"),
@@ -148,6 +150,26 @@ fn index_of<T: PartialEq + Copy>(table: &[(T, &str)], value: T) -> usize {
     table.iter().position(|(v, _)| *v == value).unwrap_or(0)
 }
 
+/// "sda       [SATA]   512G  GPT    Samsung SSD 870"
+pub fn disk_row(disk: &BlockDevice) -> String {
+    let tag = match disk.tran.as_deref() {
+        Some("nvme") => "NVMe".to_string(),
+        Some("sata") => "SATA".into(),
+        Some("usb") => "USB".into(),
+        Some(other) => other.to_uppercase(),
+        None if disk.name().starts_with("vd") => "virtio".into(),
+        None => "disk".into(),
+    };
+    let table = match disk.pttype.as_deref() {
+        Some("gpt") => "GPT".to_string(),
+        Some("dos") => "MBR".into(),
+        Some(other) => other.to_uppercase(),
+        None => "empty".into(),
+    };
+    let size = disk.size.map(human_size).unwrap_or_default();
+    format!("{:<9} {:<8} {size:>6}  {table:<5}  {}", disk.name(), format!("[{tag}]"), disk.model.as_deref().unwrap_or("").trim())
+}
+
 /// "" -> "/", "boot" -> "/boot"
 pub fn show_mount(key: &str) -> String {
     format!("/{key}")
@@ -173,9 +195,26 @@ impl Field {
     }
 }
 
-/// A form opened from a list step.
+/// Groups of steps, as the sidebar shows them. The install itself is the last stage.
+pub const STAGES: [(&str, &[Step]); 7] = [
+    ("Disks", &[Step::Partition, Step::Boot, Step::FormatBoot, Step::Root, Step::Home, Step::FormatHome, Step::ExtraMounts, Step::Swap]),
+    ("Mirrors & locale", &[Step::Mirrors, Step::Timezone, Step::Locale]),
+    ("Users", &[Step::Accounts, Step::Shell, Step::MoreUsers]),
+    ("Boot & drivers", &[Step::Bootloader, Step::Privilege, Step::Nvidia, Step::Amd]),
+    ("Desktop & apps", &[Step::Desktop, Step::Autologin, Step::Browser, Step::Packages]),
+    ("Network & extras", &[Step::Wifi, Step::Extras]),
+    ("Summary", &[Step::Finish, Step::Review]),
+];
+
+pub fn stage_of(step: Step) -> usize {
+    STAGES.iter().position(|(_, steps)| steps.contains(&step)).unwrap_or(0)
+}
+
+/// A form (or a list of actions) opened from a list step.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sub {
+    /// What to do with this disk
+    Disk(String),
     /// Mount point for this partition
     Mount(String),
     NewUser { admin: bool },
@@ -201,6 +240,8 @@ pub struct App<'a> {
     /// Mounts on existing partitions while picking them
     pub filesystem: Filesystem<'a>,
     pub sys: System,
+    /// The running (or finished) install, once y is pressed
+    pub install: Option<crate::term::Install>,
     logger: &'a Logger,
 }
 
@@ -236,6 +277,7 @@ impl<'a> App<'a> {
             cfg,
             filesystem: Filesystem::new(logger),
             sys,
+            install: None,
             logger,
         };
         app.enter(Step::Partition);
@@ -309,7 +351,7 @@ impl<'a> App<'a> {
     }
 
     pub fn is_form(&self) -> bool {
-        matches!(self.step, Step::Accounts | Step::Wifi | Step::Packages) || self.sub.is_some()
+        matches!(self.step, Step::Accounts | Step::Wifi | Step::Packages) || matches!(self.sub, Some(Sub::Mount(_) | Sub::NewUser { .. } | Sub::Extra(_)))
     }
 
     pub fn filterable(&self) -> bool {
@@ -352,22 +394,25 @@ impl<'a> App<'a> {
                 .map(String::from)
                 .into_iter()
                 .chain(self.partitions().iter().map(|p| match self.mount_of(&p.path) {
-                    Some(m) => format!("{}  → {}", p.describe(), show_mount(m)),
+                    Some(m) => format!("{}  -> {}", p.describe(), show_mount(m)),
                     None => p.describe(),
                 }))
                 .collect()
         };
         match self.step {
-            Step::Partition => {
-                let mut options = vec!["Use the partitions as they are, continue".to_string()];
-                for disk in self.sys.disks() {
-                    let d = disk.describe();
-                    options.push(format!("Erase {d}"));
-                    options.push(format!("Use free space on {d}"));
-                    options.push(format!("Edit {d} in cfdisk"));
-                }
-                options
-            }
+            Step::Partition if matches!(self.sub, Some(Sub::Disk(_))) => labels(&[
+                "Erase it - new EFI + root, everything on it is lost",
+                "Use its free space - new EFI + root next to what's there",
+                "Edit it in cfdisk, then pick the partitions",
+                "Back",
+            ]),
+            Step::Partition => self
+                .sys
+                .disks()
+                .into_iter()
+                .map(disk_row)
+                .chain(std::iter::once("-> Continue with the partitions as they are".to_string()))
+                .collect(),
             Step::Boot | Step::Root => partitions(None),
             Step::Home => partitions(Some("No separate /home partition")),
             Step::ExtraMounts => partitions(Some("Done, continue")),
@@ -588,6 +633,10 @@ impl<'a> App<'a> {
                 self.filter.clear();
                 self.list.select(Some(0));
             }
+            KeyCode::Esc if self.sub.is_some() => {
+                self.sub = None;
+                self.list.select(Some(0));
+            }
             KeyCode::Esc => return Ok(self.go(false)),
             KeyCode::Enter => {
                 if let Some(&i) = visible.get(at) {
@@ -610,19 +659,29 @@ impl<'a> App<'a> {
     fn choose(&mut self, i: usize) -> Result<Action> {
         let partition = |offset: usize| self.partitions().get(i.wrapping_sub(offset)).map(|p| p.path.clone());
         match self.step {
-            Step::Partition if i == 0 => self.cfg.storage.partitioning.clear(),
-            Step::Partition => {
-                let disk = self.sys.disks()[(i - 1) / 3].path.clone();
-                match (i - 1) % 3 {
-                    2 => return Ok(Action::Partition(disk)),
-                    action => {
-                        self.cfg.storage.partitioning = vec![DiskPlan { disk, wipe: action == 0, add: default_layout() }];
-                        for mount in ["", "boot", "home"] {
-                            self.filesystem.set(mount, None)?;
+            Step::Partition => match self.sub.take() {
+                Some(Sub::Disk(disk)) => {
+                    self.list.select(Some(0));
+                    match i {
+                        0 | 1 => {
+                            self.cfg.storage.partitioning = vec![DiskPlan { disk, wipe: i == 0, add: default_layout() }];
+                            for mount in ["", "boot", "home"] {
+                                self.filesystem.set(mount, None)?;
+                            }
                         }
+                        2 => return Ok(Action::Partition(disk)),
+                        _ => return Ok(Action::None),
                     }
                 }
-            }
+                _ => match self.sys.disks().get(i) {
+                    Some(disk) => {
+                        self.sub = Some(Sub::Disk(disk.path.clone()));
+                        self.list.select(Some(0));
+                        return Ok(Action::None);
+                    }
+                    None => self.cfg.storage.partitioning.clear(),
+                },
+            },
             Step::Boot => self.filesystem.set("boot", partition(0).as_deref())?,
             Step::Root => self.filesystem.set("/", partition(0).as_deref())?,
             Step::Home => self.filesystem.set("home", partition(1).as_deref())?,
@@ -761,6 +820,8 @@ impl<'a> App<'a> {
                 self.check(&[(0, !v[0].is_empty(), "Password can't be empty."), (1, v[0] == v[1], "Passwords don't match.")])?;
                 self.cfg.remote.vnc = Some(Vnc { enable: true, password: Some(v[0].clone()), ..Default::default() });
             }
+            // a list, never a form
+            Some(Sub::Disk(_)) => {}
             None => return self.submit_step(&v),
         }
         self.sub = None;
@@ -886,7 +947,8 @@ mod tests {
     fn render(app: &mut App, terminal: &mut Terminal<TestBackend>) -> String {
         terminal.draw(|f| ui::draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
-        let text: String = buffer.content.chunks(80).map(|row| row.iter().map(|c| c.symbol()).collect::<String>() + "\n").collect();
+        let width = buffer.area.width as usize;
+        let text: String = buffer.content.chunks(width).map(|row| row.iter().map(|c| c.symbol()).collect::<String>() + "\n").collect();
         if std::env::var("SHOW_SCREENS").is_ok() {
             println!("{text}");
         }
@@ -900,10 +962,16 @@ mod tests {
         let mut app = App::with_system(&logger, machine());
         let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
 
+        // sda -> cfdisk, then continue with its partitions
         render(&mut app, &mut terminal);
-        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sub, Some(Sub::Disk("/dev/sda".into())));
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
         assert!(matches!(press(&mut app, KeyCode::Enter), Action::Partition(d) if d == "/dev/sda"));
-        press(&mut app, KeyCode::Home);
+        assert_eq!(app.sub, None);
+        press(&mut app, KeyCode::End);
         press(&mut app, KeyCode::Enter);
 
         // EFI preselected, kept; root on the EFI partition is refused
@@ -1058,7 +1126,7 @@ mod tests {
         let logger = Logger::new(false);
         let mut app = App::with_system(&logger, machine());
         let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
-        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.step, Step::ExtraMounts);
         assert!(app.cfg.storage.partitioning[0].wipe);
@@ -1074,6 +1142,34 @@ mod tests {
         let screen = render(&mut app, &mut terminal);
         assert!(screen.contains("ERASE"), "{screen}");
         assert_eq!(app.problems, Vec::<String>::new());
+    }
+
+    /// The install screen around a stand-in installer on a real pty.
+    #[test]
+    fn install_view() {
+        let logger = Logger::new(false);
+        let mut app = App::with_system(&logger, machine());
+        app.cfg.storage.partitioning = vec![DiskPlan { disk: "/dev/sda".into(), wipe: true, add: default_layout() }];
+        let script = r#"printf '\033]0;2lazy4arch 5/12 Installing the base system\007\033[1;36m==>\033[0m \033[1mInstalling the base system\033[0m\n'; for i in 1 2 3; do echo "($i/173) installing linux"; done; sleep 0.5"#;
+        app.install = Some(crate::term::Install::spawn("sh", &["-c", script], 10, 60).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        app.install.as_mut().unwrap().pump();
+        let mut small = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        let mut big = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        render(&mut app, &mut small);
+        let screen = render(&mut app, &mut big);
+        for expected in ["Installing the base system", "step 5/12", "(2/173) installing linux", "[STATUS: RUNNING]", "[ACTIVE]", "new arch-root"] {
+            assert!(screen.contains(expected), "no {expected:?} in\n{screen}");
+        }
+        for _ in 0..30 {
+            app.install.as_mut().unwrap().pump();
+            if app.install.as_ref().unwrap().status != crate::term::Status::Running {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let screen = render(&mut app, &mut big);
+        assert!(screen.contains("[DONE]") && screen.contains("100%"), "{screen}");
     }
 
     #[test]

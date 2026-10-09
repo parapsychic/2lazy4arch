@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs};
+use std::{
+    collections::BTreeSet,
+    fs,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use anyhow::{anyhow, bail, Result};
 use config::{strip_secrets, Config, Desktop};
@@ -50,8 +54,21 @@ pub struct Summary {
     pub skipped: Vec<String>,
 }
 
+static STEP: AtomicUsize = AtomicUsize::new(0);
+static STEPS: AtomicUsize = AtomicUsize::new(0);
+
+/// Announces a step. The terminal title carries "2lazy4arch <n>/<total> <msg>",
+/// which the TUI reads for its progress bar (a plain terminal just shows it).
 pub fn step(msg: &str) {
-    println!("\n\x1b[1;36m==>\x1b[0m \x1b[1m{msg}\x1b[0m");
+    let n = STEP.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = STEPS.load(Ordering::Relaxed).max(n);
+    println!("\n\x1b]0;2lazy4arch {n}/{total} {msg}\x07\x1b[1;36m==>\x1b[0m \x1b[1m{msg}\x1b[0m");
+}
+
+/// How many step() calls an install of `cfg` makes.
+fn count_steps(cfg: &Config, packages: &config::PackageSet) -> usize {
+    let hooks = [&cfg.hooks.pre_install, &cfg.hooks.post_install, &cfg.hooks.post_setup];
+    11 + hooks.iter().filter(|h| !h.is_empty()).count() + !packages.aur.is_empty() as usize + cfg.rice_users().len()
 }
 
 /// Everything from getting online to a finished system. `confirm_missing` decides
@@ -59,6 +76,7 @@ pub fn step(msg: &str) {
 /// is touched.
 pub fn install(job: &Install, confirm_missing: &dyn Fn(&[String]) -> bool) -> Result<Summary> {
     let Install { cfg, sys, source, logger, .. } = *job;
+    STEPS.store(count_steps(cfg, &cfg.packages(&sys.gpus)), Ordering::Relaxed);
 
     step("Getting online");
     network::apply_proxy(cfg);

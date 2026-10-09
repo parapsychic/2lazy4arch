@@ -198,8 +198,8 @@ desktop: hyprland                 # dwm | hyprland | kde | gnome | xfce | lxde |
                                   # default: none
                                   # its login screen comes with it: lightdm (dwm, xfce),
                                   # sddm (hyprland), Plasma Login (kde), gdm (gnome), lxdm (lxde)
-browser: firefox                  # firefox | librewolf | chromium | vivaldi | none
-                                  # brave | zen | chrome (AUR)
+browser: firefox                  # firefox | librewolf | chromium | epiphany | konqueror
+                                  # qutebrowser | falkon | none, or zen | chrome (AUR)
                                   # default: firefox with a desktop, none without
 
 

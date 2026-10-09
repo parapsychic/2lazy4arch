@@ -1,9 +1,11 @@
 mod app;
+mod term;
 mod ui;
 
 use std::{
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
     process::{Command, ExitCode},
     thread,
     time::Duration,
@@ -11,7 +13,7 @@ use std::{
 
 use app::{Action, App};
 use crossterm::{
-    event::{self, Event, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -53,6 +55,9 @@ fn main() -> ExitCode {
     if flag("--user-setup") {
         return user_setup(&args);
     }
+    if let Some(i) = args.iter().position(|a| a == "--run-install") {
+        return run_installer(args.get(i + 1).map(String::as_str).unwrap_or_default());
+    }
 
     let config = args.iter().position(|a| a == "--config-file").map(|i| args.get(i + 1));
     let known = |i: usize, a: &String| ["--config-file", "--no-confirm", "--no-validate"].contains(&a.as_str()) || (i > 0 && args[i - 1] == "--config-file");
@@ -81,16 +86,63 @@ fn main() -> ExitCode {
 fn wizard() -> ExitCode {
     let logger = Logger::new(false);
     let mut app = App::new(&logger);
-    match run_tui(&mut app) {
-        Ok(true) => {}
-        Ok(false) => return ExitCode::SUCCESS,
+    let start = |app: &App| spawn_installer(serde_json::to_value(&app.cfg)?, &Source::Dir(".".into()));
+    tui_result(run_tui(&mut app, &start))
+}
+
+/// After the TUI closes: what happened, in the normal terminal.
+fn tui_result(result: io::Result<Option<bool>>) -> ExitCode {
+    match result {
+        Ok(None) => ExitCode::SUCCESS,
+        Ok(Some(true)) => {
+            println!("Installation finished. The log is at {LOG_FILE}.");
+            ExitCode::SUCCESS
+        }
+        Ok(Some(false)) => {
+            eprintln!("The install stopped before finishing. The log is at {LOG_FILE}.");
+            ExitCode::FAILURE
+        }
         Err(e) => {
             eprintln!("Terminal error: {e}");
-            return ExitCode::FAILURE;
+            ExitCode::FAILURE
         }
     }
-    let value = serde_json::to_value(&app.cfg).unwrap_or_default();
-    run_install(&app.cfg, &app.sys, &Source::Dir(".".into()), &logger, value, true)
+}
+
+/// Starts this binary with --run-install on a pseudo-terminal. The config goes
+/// through a root-only file the child deletes once read.
+fn spawn_installer(config: Value, source: &Source) -> anyhow::Result<term::Install> {
+    let dir = "/tmp/2lazy4arch";
+    fs::create_dir_all(dir)?;
+    let path = format!("{dir}/run.json");
+    let job = serde_json::json!({ "config": config, "source": source.base() });
+    OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?.write_all(job.to_string().as_bytes())?;
+    let exe = std::env::current_exe()?;
+    term::Install::spawn(&exe.display().to_string(), &["--run-install", &path], 24, 80)
+}
+
+/// The child side of spawn_installer: the install itself, printing to the pty.
+fn run_installer(path: &str) -> ExitCode {
+    let job = fs::read_to_string(path);
+    let _ = fs::remove_file(path);
+    let parsed = job.map_err(anyhow::Error::from).and_then(|text| {
+        let job: Value = serde_json::from_str(&text)?;
+        let source = Source::from_base(job["source"].as_str().unwrap_or("."));
+        let mut cfg: Config = serde_json::from_value(job["config"].clone())?;
+        cfg.load_lists(&source)?;
+        Ok((cfg, source, job["config"].clone()))
+    });
+    match parsed {
+        Ok((cfg, source, value)) => {
+            let logger = Logger::new(false);
+            let sys = System::probe(&logger);
+            run_install(&cfg, &sys, &source, &logger, value, true)
+        }
+        Err(e) => {
+            eprintln!("Couldn't read the install job: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn bullets(lines: &[String]) -> String {
@@ -134,17 +186,15 @@ fn declarative(location: &str, confirm: bool, validate: bool) -> ExitCode {
     }
 
     if confirm {
-        let mut app = App::preview(&logger, sys.clone(), cfg.clone());
-        match run_tui(&mut app) {
-            Ok(true) => {}
-            Ok(false) => {
-                println!("Nothing was changed.");
-                return ExitCode::SUCCESS;
-            }
-            Err(e) => return fail(format!("Terminal error: {e}")),
+        let mut app = App::preview(&logger, sys, cfg);
+        let start = |_: &App| spawn_installer(value.clone(), &source);
+        let result = run_tui(&mut app, &start);
+        if let Ok(None) = result {
+            println!("Nothing was changed.");
         }
+        return tui_result(result);
     }
-    run_install(&cfg, &sys, &source, &logger, value, confirm)
+    run_install(&cfg, &sys, &source, &logger, value, false)
 }
 
 /// Installs, logging everything; then finishes the way the config says.
@@ -264,31 +314,54 @@ fn restore_terminal() -> io::Result<()> {
     execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show)
 }
 
-/// Runs the TUI; Ok(true) means install.
-fn run_tui(app: &mut App) -> io::Result<bool> {
+/// Runs the TUI, the install included once y is pressed. Ok(None): quit before
+/// installing; Ok(Some(ok)): the install ran and succeeded or not.
+fn run_tui(app: &mut App, start: &dyn Fn(&App) -> anyhow::Result<term::Install>) -> io::Result<Option<bool>> {
     // Don't leave the console in raw mode if we crash.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = restore_terminal();
         default_hook(info);
     }));
-    let result = setup_terminal().and_then(|mut terminal| event_loop(&mut terminal, app));
+    let result = setup_terminal().and_then(|mut terminal| event_loop(&mut terminal, app, start));
     let _ = restore_terminal();
     let _ = std::panic::take_hook();
     result
 }
 
-fn event_loop(terminal: &mut Term, app: &mut App) -> io::Result<bool> {
+fn event_loop(terminal: &mut Term, app: &mut App, start: &dyn Fn(&App) -> anyhow::Result<term::Install>) -> io::Result<Option<bool>> {
     loop {
+        if let Some(install) = &mut app.install {
+            install.pump();
+        }
         terminal.draw(|f| ui::draw(f, app))?;
+        // redraw often while installing, for the output and the spinner
+        if !event::poll(Duration::from_millis(80))? {
+            continue;
+        }
         let Event::Key(key) = event::read()? else { continue };
         if key.kind != KeyEventKind::Press {
             continue;
         }
+
+        if let Some(install) = &mut app.install {
+            match (install.status, key.code) {
+                (_, KeyCode::PageUp) => install.scroll(10),
+                (_, KeyCode::PageDown) => install.scroll(-10),
+                (term::Status::Finished(ok), KeyCode::Char('q') | KeyCode::Enter | KeyCode::Esc) => return Ok(Some(ok)),
+                (term::Status::Running, _) => install.send(key),
+                _ => {}
+            }
+            continue;
+        }
+
         match app.on_key(key) {
             Action::None => {}
-            Action::Quit => return Ok(false),
-            Action::Install => return Ok(true),
+            Action::Quit => return Ok(None),
+            Action::Install => match start(app) {
+                Ok(install) => app.install = Some(install),
+                Err(e) => app.error = Some(format!("Couldn't start the install: {e:#}")),
+            },
             Action::Partition(disk) => {
                 restore_terminal()?;
                 if let Err(e) = app.filesystem.partition_disks(&disk) {

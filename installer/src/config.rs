@@ -428,8 +428,10 @@ pub enum Browser {
     Firefox,
     Librewolf,
     Chromium,
-    Vivaldi,
-    Brave,
+    Epiphany,
+    Konqueror,
+    Qutebrowser,
+    Falkon,
     Zen,
     Chrome,
     None,
@@ -1005,8 +1007,10 @@ impl Config {
             Browser::Firefox => repo.push("firefox"),
             Browser::Librewolf => repo.push("librewolf"),
             Browser::Chromium => repo.push("chromium"),
-            Browser::Vivaldi => repo.push("vivaldi"),
-            Browser::Brave => aur.push("brave-bin"),
+            Browser::Epiphany => repo.push("epiphany"),
+            Browser::Konqueror => repo.push("konqueror"),
+            Browser::Qutebrowser => repo.push("qutebrowser"),
+            Browser::Falkon => repo.push("falkon"),
             Browser::Zen => aur.push("zen-browser-bin"),
             Browser::Chrome => aur.push("google-chrome"),
             Browser::None => {}
@@ -1144,12 +1148,12 @@ mod tests {
 
     #[test]
     fn tuf_505dt_auto() {
-        let cfg = Config { desktop: Desktop::Kde, browser: Some(Browser::Brave), ..Default::default() };
+        let cfg = Config { desktop: Desktop::Kde, browser: Some(Browser::Zen), ..Default::default() };
         let p = cfg.packages(&[AMD, GTX_1650]);
         for pkg in ["vulkan-radeon", "nvidia-open", "nvidia-utils", "nvidia-prime", "plasma-meta", "mesa"] {
             assert!(has(&p, pkg), "missing {pkg}");
         }
-        assert_eq!(p.aur, ["brave-bin"]);
+        assert_eq!(p.aur, ["zen-browser-bin"]);
         assert_eq!(p.services, ["plasmalogin"]);
         assert!(cfg.nvidia_proprietary(&[AMD, GTX_1650]));
     }

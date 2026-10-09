@@ -43,6 +43,8 @@ pub struct BlockDevice {
     pub tran: Option<String>,
     #[serde(default)]
     pub rm: bool,
+    /// Partition table: "gpt", "dos" or none
+    pub pttype: Option<String>,
 }
 
 impl BlockDevice {
@@ -89,7 +91,7 @@ struct Lsblk {
 pub fn lsblk(shell: &mut Shell) -> Result<Vec<BlockDevice>> {
     let output = shell.run_with_args(
         "lsblk",
-        "--json --list --bytes -e 1,11 -o PATH,TYPE,SIZE,FSTYPE,PARTTYPENAME,LABEL,PARTLABEL,PARTUUID,UUID,MODEL,PKNAME,TRAN,RM",
+        "--json --list --bytes -e 1,11 -o PATH,TYPE,SIZE,FSTYPE,PARTTYPENAME,LABEL,PARTLABEL,PARTUUID,UUID,MODEL,PKNAME,TRAN,RM,PTTYPE",
     )?;
     Ok(serde_json::from_slice::<Lsblk>(&output.stdout)?.blockdevices)
 }
@@ -105,6 +107,7 @@ pub struct System {
     pub locales: Vec<String>,
     pub interfaces: Vec<String>,
     pub wireless: Vec<String>,
+    pub kernel: String,
 }
 
 impl System {
@@ -120,6 +123,7 @@ impl System {
             locales: parse_locale_gen(&fs::read_to_string("/etc/locale.gen").unwrap_or_default()),
             interfaces,
             wireless,
+            kernel: fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default().trim().to_string(),
         }
     }
 
