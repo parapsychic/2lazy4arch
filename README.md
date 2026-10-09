@@ -28,6 +28,19 @@ linux-headers bluez bluez-utils pipewire pipewire-pulse pipewire-jack
 pipewire-alsa wireplumber alsa-utils git cups
 ```
 
+## Screenshots
+What was found on the machine, before anything else:
+
+![Welcome screen listing the detected firmware, CPU, memory, graphics, storage and network](docs/Screenshot3.png)
+
+Picking a desktop:
+
+![Desktop step with DWM, Hyprland, KDE Plasma, GNOME, Xfce, LXDE and None](docs/Screenshot1.png)
+
+The summary, with everything that will be erased or formatted in red, before `y` starts the install:
+
+![Summary screen showing the disks to erase and format, system settings, users and packages](docs/Screenshot2.png)
+
 ## How To Use?
 Boot the Arch ISO in UEFI mode and get online (`iwctl` for wifi; ethernet just works). Then, as root:
 
