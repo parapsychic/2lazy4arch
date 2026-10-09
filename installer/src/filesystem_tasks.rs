@@ -1,38 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Result};
-use serde::Deserialize;
 use shell_iface::{logger::Logger, Shell};
-
-/// A row of `lsblk --list`.
-#[derive(Debug, Deserialize)]
-pub struct BlockDevice {
-    pub path: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub size: Option<String>,
-    pub fstype: Option<String>,
-    pub parttypename: Option<String>,
-    pub label: Option<String>,
-    pub model: Option<String>,
-}
-
-impl BlockDevice {
-    /// One line for pickers, e.g. "/dev/sda1  512M  vfat  EFI System"
-    pub fn describe(&self) -> String {
-        [&self.size, &self.fstype, &self.parttypename, &self.label, &self.model]
-            .into_iter()
-            .flatten()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .fold(self.path.clone(), |acc, s| format!("{acc}  {s}"))
-    }
-}
-
-#[derive(Deserialize)]
-struct Lsblk {
-    blockdevices: Vec<BlockDevice>,
-}
 
 pub struct Filesystem<'a> {
     shell: Shell<'a>,
@@ -52,15 +21,6 @@ impl<'a> Filesystem<'a> {
             format_boot: false,
             format_home: false,
         }
-    }
-
-    /// Disks and partitions, without RAM disks (1), loop devices (7) and optical drives (11).
-    pub fn lsblk(&mut self) -> Result<Vec<BlockDevice>> {
-        let output = self.shell.run_with_args(
-            "lsblk",
-            "--json --list -e 1,7,11 -o PATH,TYPE,SIZE,FSTYPE,PARTTYPENAME,LABEL,MODEL",
-        )?;
-        Ok(serde_json::from_slice::<Lsblk>(&output.stdout)?.blockdevices)
     }
 
     /// Partition mounted at `mount_point` ("/", "boot", "/home", ...).

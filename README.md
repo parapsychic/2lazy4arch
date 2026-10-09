@@ -1,105 +1,137 @@
 # 2Lazy4Arch: Installing Arch Really Fast
 A dead simple, fast and opinionated Arch Linux Installer, written in Rust.
 
+Click through a wizard, or describe the whole machine in one YAML file and let it install unattended.
+
 ## What to Expect?
-- A step-by-step TUI: partitioning with `cfdisk`, then mount points, mirrors, swap, timezone, locale, users, bootloader, drivers, desktop and browser, then a review screen before anything is touched.
-- Works on Intel and AMD CPUs (microcode is picked automatically) and on Intel, AMD and NVIDIA GPUs, including hybrid laptops.
-- Asks whether you want proprietary drivers:
-  - NVIDIA: `nvidia-open` (GTX 16xx / RTX and newer), legacy `nvidia-580xx` (GTX 9xx / 10xx, AUR) or `nouveau`. Hybrid laptops also get `nvidia-prime` (`prime-run`).
+- **Two ways in:** a step-by-step TUI, or a declarative config file (local or a URL) that installs with no questions asked.
+- **Any common hardware:** Intel and AMD CPUs (microcode picked automatically), Intel, AMD and NVIDIA GPUs, hybrid laptops included.
+- **Proprietary drivers, your call:**
+  - NVIDIA: `nvidia-open` (GTX 16xx / RTX and newer), legacy `nvidia-580xx` (GTX 9xx / 10xx, AUR) or `nouveau`. The default is picked from your card's generation. Hybrid laptops also get `nvidia-prime` (`prime-run`).
   - AMD: Mesa, or Mesa + AMDGPU PRO (proprietary Vulkan and AMF, AUR).
   - Intel: always Mesa (`vulkan-intel`, `intel-media-driver`).
-- Desktop / window manager, each booting to a login screen:
-  DWM (Xorg, built from suckless git with dmenu and st), Hyprland (Wayland), KDE Plasma, GNOME, Xfce, LXDE, or none.
-- Browser: Firefox, LibreWolf, Chromium, Vivaldi, or from the AUR: Brave, Zen, Google Chrome.
-- Reflector to rank pacman mirrors.
-- A swap file (none, 1 to 64 GB) instead of a swap partition.
-- Sudo/Doas, Grub (with os-prober for dual boot)/systemd-boot.
-- Yay as AUR helper (part 2).
-- UEFI only. The installer refuses to start the install when booted in BIOS mode.
-- The following programs:
+- **Desktop / window manager**, each booting to a login screen: DWM (Xorg, built from suckless git with dmenu and st), Hyprland (Wayland), KDE Plasma, GNOME, Xfce, LXDE, or none.
+- **Browser:** Firefox, LibreWolf, Chromium, Vivaldi, or from the AUR: Brave, Zen, Google Chrome.
+- **Disks:** erase a disk, use the free space next to Windows, or pick partitions yourself (`cfdisk` is built in). Extra partitions can be mounted as they are.
+- **Users:** any number, admins or not, with zsh or fish, extra groups, SSH keys (or your GitHub keys), autologin. Root can stay locked.
+- **Extras:** SSH, Tailscale, VNC, Docker and Compose, multilib, extra pacman and AUR packages.
+- **Config file only:** wifi / ethernet / PPPoE connections (WPA2/3, enterprise EAP, static IPs, VLANs), DNS over TLS, a proxy, Docker containers started on first boot, apps and services started at login and boot, and your own hooks before and after the install.
+- **Safe by default:** nothing is touched until you confirm a full review, and the config is checked against the machine first: disks, free space, users, interfaces, files. Package names that don't exist are skipped and listed instead of failing the whole install.
+- Reflector-ranked mirrors, a swap file instead of a swap partition, sudo or doas, GRUB (with os-prober for dual boot) or systemd-boot, yay for the AUR.
+- UEFI only.
+- Every install gets:
 ```
-base
-linux
-linux-firmware
-intel-ucode/amd-ucode (if your processor is detected)
-neovim
-reflector
-efibootmgr
-os-prober
-ntfs-3g
-networkmanager
-network-manager-applet
-wireless_tools
-wpa_supplicant
-dialog
-mtools
-dosfstools
-base-devel
-linux-headers
-bluez
-bluez-utils
-pipewire
-pipewire-pulse
-pipewire-jack
-pipewire-alsa
-wireplumber
-alsa-utils
-git
-cups
-mesa + your GPU drivers
+base linux linux-firmware intel-ucode/amd-ucode neovim reflector
+efibootmgr os-prober ntfs-3g networkmanager network-manager-applet
+wireless_tools wpa_supplicant dialog mtools dosfstools base-devel
+linux-headers bluez bluez-utils pipewire pipewire-pulse pipewire-jack
+pipewire-alsa wireplumber alsa-utils git cups
 ```
 
 ## How To Use?
-This is a two-part installation process.
-
-Part 1 installs a bootable system with your drivers, desktop and browser. If you picked nothing from the AUR, that's all you need.
-
-Part 2 runs after the first boot. It sets up yay, installs the AUR packages you picked in part 1, and anything listed in your own package files.
-
-### Part 1: Installing the system
-Boot the Arch ISO in UEFI mode, connect to the internet, then download a release and run it. Replace the version with the release tag.
+Boot the Arch ISO in UEFI mode and get online (`iwctl` for wifi; ethernet just works). Then, as root:
 
 ```sh
-# curl -L https://github.com/parapsychic/2lazy4arch/releases/download/{release}/2lazy4arch \
-#  --output 2lazy4arch
-#eg:
-curl -L https://github.com/parapsychic/2lazy4arch/releases/download/v2.0.0/2lazy4arch \
- --output 2lazy4arch
+curl -fsSL https://raw.githubusercontent.com/parapsychic/2lazy4arch/main/install.sh | bash
+```
 
+[install.sh](install.sh) downloads the latest release to `/usr/local/bin/2lazy4arch` and runs it. Arguments after `bash -s --` are passed on, and `LAZY_VERSION` picks a release instead of the latest:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/parapsychic/2lazy4arch/main/install.sh | LAZY_VERSION=v2.1.0 bash
+```
+
+Or download the binary yourself:
+```sh
+curl -L https://github.com/parapsychic/2lazy4arch/releases/latest/download/2lazy4arch --output 2lazy4arch
 chmod +x 2lazy4arch
-
 ./2lazy4arch
 ```
 
-Follow the steps. The sidebar shows where you are and what you picked.
+When the install is done it reboots, powers off or stays on the ISO, whichever you picked. Rebooting and powering off wait 10 seconds first, and `ctrl+c` stays instead, with the new system mounted at `/mnt`. Everything the install printed is in `/var/log/2lazy4arch.log`, on the ISO and in the new system.
+
+### The wizard
+Run `2lazy4arch` with no arguments. The sidebar shows where you are and what you picked.
+
 - `↑↓` (or `jk` on short lists) to move, `enter` to pick, `esc` to go back, `ctrl+c` to quit.
-- Long lists (mirrors, timezones, locales) filter as you type.
-- Nothing is formatted until you press `y` on the review screen. The exception is `cfdisk`, which writes partition changes when you save in it.
+- Mirrors, timezones and locales filter as you type.
+- In forms, `tab` or `↑↓` moves between fields and `enter` confirms.
+- Nothing is written to disk until you press `y` on the review screen. The exception is `cfdisk`, which saves as you go.
 
-Before touching the disks, it ranks mirrors and checks that every package it's about to install exists in the repos. Anything missing is listed, and you can stop there with nothing changed or continue without it.
+The steps:
+1. Partitioning: erase a disk, use its free space, or edit it in cfdisk and pick the EFI, root and home partitions
+2. Other mounts, swap, mirrors, timezone, locale
+3. Your user and root, your shell, more users
+4. Bootloader, admin tool, NVIDIA and AMD drivers (only when that GPU is there)
+5. Desktop, autologin, browser, Wi-Fi (only with a wifi card)
+6. Extras: SSH, Tailscale, VNC, Docker, multilib, the ParaPsychic rice
+7. Extra packages, and what to do when done
 
-When it's done, it prints `Installation finished.` and copies itself to `/usr/local/bin/2lazy4arch` in the new system. If it fails, the error is printed and every command it ran is in `shell_log.txt`.
+The review screen runs the same checks as a config file and lists any problem in red; `y` only works once they're fixed. What you picked is saved in the new system as `/etc/2lazy4arch/config.yaml`, minus passwords and keys, so the same install can be repeated as a config file.
 
-Reboot.
+### Declarative install
+Describe the machine in YAML and install it in one go:
 
-### Part 2: Post Installation
-Log in as your user (not root) and run:
 ```sh
-2lazy4arch
+2lazy4arch --config-file my-arch.yaml
+2lazy4arch --config-file https://example.com/my-arch.yaml
+curl -fsSL https://raw.githubusercontent.com/parapsychic/2lazy4arch/main/install.sh \
+  | bash -s -- --config-file https://example.com/my-arch.yaml --no-confirm
 ```
-It shows the AUR packages queued from part 1, then asks for two optional files (press enter to skip either):
-- a package list installed with `pacman`
-- a package list installed with `yay`
 
-Package lists have one package name per line; blank lines and `#` comments are ignored. Names that aren't in the repos (or, for the yay list, the AUR either) are skipped instead of failing the whole install, and listed at the end. See the [example files](https://github.com/parapsychic/2lazy4arch/tree/main/examples).
+| Flag | |
+|---|---|
+| `--config-file <path or URL>` | Read the config from a file, or from any URL `curl` can fetch (`http://`, `https://`, ...). Paths inside it (scripts, package lists, certificates, compose files) are relative to the config; for a URL they're downloaded from next to it. |
+| `--no-confirm` | Skip the preview. The install starts right away and nothing is ever asked; packages that aren't in the repos are skipped. |
+| `--no-validate` | Skip the checks below. |
 
-Keep an eye out for sudo password prompts. When everything worked it prints `Installation has finished. Enjoy!`. Running it again is safe: anything already installed is skipped.
+[unattended-config.yaml](unattended-config.yaml) is a full, commented example of every key and its default. [unattended-config-schema.json](unattended-config-schema.json) is its schema; editors with the YAML language server (VS Code's YAML extension, for one) complete and check keys as you type.
+
+The smallest config that installs erases the machine's only internal disk and makes one admin user:
+```yaml
+version: 1
+storage:
+  partitioning:
+    - disk: auto
+      wipe: true
+users:
+  - name: parapsychic
+    password_hash: "$6$..."   # from: openssl passwd -6
+```
+
+Before anything happens:
+1. **Schema.** The config has to match the schema, or the install stops with `Configuration is invalid:` and every problem with where it is, like `users/0/name: ...`.
+2. **This machine.** Then it checks that the config would work here, or stops with `Configuration would not work with this system:` and the reasons. It checks that:
+   - the machine booted in UEFI mode
+   - `disk: auto` finds exactly one internal disk, named disks exist, new partitions fit in the free space, and `size: rest` is only on the last one
+   - every partition reference (`/dev/...`, `PARTLABEL=`, `PARTUUID=`, `UUID=`, `LABEL=`) matches exactly one partition, nothing is mounted twice, and other mounts already have a filesystem
+   - usernames are unique and not root, someone can administer the machine (an admin user or a root password), and `autologin`, `as:` and user lists name real users
+   - `listen: tailscale` has Tailscale turned on, and VNC has a desktop and a password
+   - the mirror country, timezone, locale and network interfaces exist, and wifi connections have a wifi card
+   - every file named in the config can be read
+3. **Preview.** A review screen shows what will happen: disks to erase and format, users, drivers, network, remote access, packages, Docker, hooks. `y` installs, `esc` quits with nothing changed.
+
+Then, in order:
+1. Get online with your connections, unless the ISO already is
+2. `pre_install` hooks
+3. Mirrors and the package check
+4. Partition, format and mount, then pacstrap
+5. Configure the new system
+6. `post_install` hooks
+7. As your users: AUR packages, the rice, autostart apps, `post_setup` hooks
+8. `finish`
+
+Tailscale joins and Docker containers start on the first boot. Any failure stops the install and skips `finish`.
+
+### After installing
+On the installed system, as your user, `2lazy4arch --user-setup` installs AUR packages with yay (setting yay up first if needed), or applies the rice:
+```sh
+2lazy4arch --user-setup visual-studio-code-bin spotify
+2lazy4arch --user-setup --rice
+```
 
 #### [Note to me] ParaPsychic Mode
-To run my specific settings (dotfiles, my dwm/dmenu builds, multilib, pacman candy, touchpad config), run part 2 with the `parapsychic-mode` argument:
-```sh
-2lazy4arch parapsychic-mode
-```
+My dotfiles, my dwm/dmenu builds, multilib, pacman candy and the touchpad config: the "ParaPsychic rice" extra in the wizard, or `parapsychic_mode: true` in a config.
 
 #### Compiling
 Install rust by following this [guide](https://www.rust-lang.org/learn/get-started).
@@ -115,14 +147,17 @@ The compiled binary will be at `target/release/toolazy4arch`. The naming is diff
 
 
 ## How To Extend?
-### Packages
-Part 2 takes your own package lists. Refer to the [How-To-Use?](#how-to-use) section to learn more.
+### Config keys
+The config is `Config` in [installer/src/config.rs](installer/src/config.rs), mirroring [unattended-config-schema.json](unattended-config-schema.json). Add a key to both. A test checks the example config against the schema, so update [unattended-config.yaml](unattended-config.yaml) too.
 
 ### Drivers, desktops, browsers
-They all map to packages in `Config::packages()` in [installer/src/config.rs](installer/src/config.rs). The choices shown in the TUI live in [tui/src/app.rs](tui/src/app.rs).
+They all map to packages in `Config::packages()` in [installer/src/config.rs](installer/src/config.rs). The choices shown in the wizard live in [tui/src/app.rs](tui/src/app.rs).
+
+### Hooks
+For one-off tweaks, no code needed: `hooks.pre_install`, `post_install` and `post_setup` in a config run your own commands or scripts at each stage. See [unattended-config.yaml](unattended-config.yaml).
 
 ### Ricing
-`parapsychic-mode` is `PostInstall::misc_options` in [installer/src/post_install.rs](installer/src/post_install.rs). To rice with your own dotfiles, change `DOTFILES_REPO`, `GIT_NAME` and `GIT_EMAIL` at the top of that file and edit the steps, then [compile](#compiling).
+The rice is `PostInstall::misc_options` in [installer/src/post_install.rs](installer/src/post_install.rs). To rice with your own dotfiles, change `DOTFILES_REPO`, `GIT_NAME` and `GIT_EMAIL` at the top of that file and edit the steps, then [compile](#compiling).
 
 ## Problems?
 It Just Works<sup>TM</sup>  

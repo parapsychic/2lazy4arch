@@ -4,6 +4,8 @@ use anyhow::{bail, Result};
 use nix::unistd::Uid;
 use shell_iface::{logger::Logger, Shell};
 
+use crate::target::ROOT;
+
 enum PackageManager {
     Pacman,
     Yay,
@@ -15,6 +17,8 @@ pub struct Pacman<'a> {
     /// or the acutal installed machine
     is_non_root: bool,
     program: PackageManager,
+    /// Runs pacman inside the system at /mnt (arch-chroot) instead of the live one.
+    in_target: bool,
     /// Packages install() skipped because they don't exist.
     pub skipped: Vec<String>,
 }
@@ -28,8 +32,14 @@ impl<'a> Pacman<'a> {
             shell,
             is_non_root,
             program: PackageManager::Pacman,
+            in_target: false,
             skipped: vec![],
         }
+    }
+
+    /// pacman for the system being installed at /mnt.
+    pub fn in_target<'b>(logger: &'b Logger) -> Pacman<'b> {
+        Pacman { in_target: true, ..Pacman::new(logger) }
     }
 
     pub fn yay(&mut self) -> &mut Self {
@@ -45,6 +55,9 @@ impl<'a> Pacman<'a> {
     /// pacman runs through sudo when we're not root; yay must not be root and calls sudo itself.
     fn run(&mut self, args: &str) -> Result<()> {
         match (&self.program, self.is_non_root) {
+            (PackageManager::Pacman, _) if self.in_target => {
+                self.shell.run_and_wait_with_args("arch-chroot", &format!("{ROOT} pacman {args}"))?
+            }
             (PackageManager::Pacman, false) => self.shell.run_and_wait_with_args("pacman", args)?,
             (PackageManager::Pacman, true) => {
                 self.shell.run_and_wait_with_args("sudo", &format!("pacman {args}"))?
@@ -104,7 +117,14 @@ impl<'a> Pacman<'a> {
             return Ok(vec![]);
         }
         // Not through Shell: we need stderr from a failing run. One call reports every missing target.
-        let output = Command::new("pacman")
+        let mut command = if self.in_target {
+            let mut c = Command::new("arch-chroot");
+            c.args([ROOT, "pacman"]);
+            c
+        } else {
+            Command::new("pacman")
+        };
+        let output = command
             .env("LC_ALL", "C")
             .args(["-Sp", "--print-format", "%n", "--"])
             .args(packages)

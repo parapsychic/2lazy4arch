@@ -332,6 +332,27 @@ impl<'a> Shell<'a> {
         Ok(status)
     }
 
+    /// Run the program with given args, feeding `input` to its stdin, and wait.
+    /// Raises error if exited with non-zero code. The input isn't logged (it may be a password).
+    pub fn run_with_input(&mut self, cmd: &str, args: &str, input: &str) -> Result<()> {
+        let args_vec = shell_words::split(args)?;
+        if let RunMode::Debug = &self.build_mode {
+            println!("Running Shell in Test Mode: Command: {} {}", cmd, args);
+            return Ok(());
+        }
+        let mut child = Command::new(cmd).args(args_vec).stdin(Stdio::piped()).spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_bytes())?;
+        }
+        let status = child.wait()?;
+        if !status.success() {
+            self.log(&format!("`{cmd} {args}` failed with {status}"));
+            return Err(anyhow!("{}: `{} {}` failed ({})", self.identifier.to_uppercase(), cmd, args, status));
+        }
+        self.set_last_command(cmd, &status, None, None);
+        Ok(())
+    }
+
     /// Spawn the program and do not wait for it.
     /// Return a handle to the program.
     /// Does not have access to output of the program and so does not raise any error on

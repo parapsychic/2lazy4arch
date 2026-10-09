@@ -1,0 +1,422 @@
+# yaml-language-server: $schema=./unattended-config-schema.json
+#
+# 2lazy4arch — declarative install config
+#
+#   On the ISO:  2lazy4arch --config-file unattended-config.yaml
+#                2lazy4arch --config-file https://example.com/unattended-config.yaml
+#   Or in one go, downloading 2lazy4arch too:
+#     curl -fsSL https://raw.githubusercontent.com/parapsychic/2lazy4arch/main/install.sh \
+#       | bash -s -- --config-file <path or URL>
+#
+# The config is checked against unattended-config-schema.json and against the
+# machine, then previewed; y starts the install.
+#   --no-confirm   skip the preview: nothing is asked, ever (missing packages are skipped)
+#   --no-validate  skip the checks
+# Every key has a default except what can't be guessed safely: which disk to
+# use, and at least one user with a password. This is the smallest config that installs:
+#
+#   version: 1
+#   storage:
+#     partitioning:
+#       - disk: auto          # the machine's only internal disk
+#         wipe: true          # erase it: 1 GiB EFI + the rest as root
+#   users:
+#     - name: parapsychic     # the first user is an admin by default
+#       password_hash: "$6$…" # from: openssl passwd -6
+#
+# Relative paths (scripts, package lists, certificates, compose files) are
+# relative to this file.
+#
+# What runs, in order, in one go
+#   On the ISO, as root
+#     1. get online with `network` (ethernet, wifi or PPPoE, and its proxy)
+#     2. hooks.pre_install
+#     3. storage: partition → format → mount → swap file
+#     4. pacstrap: the base set and microcode
+#     5. inside the new system: multilib, swap file, timezone, locale, hostname;
+#        GPU drivers, desktop and its login screen, browser, packages.pacman and
+#        whatever network, remote and docker need; bootloader, users, admin tool,
+#        network, SSH, VNC, firewall, Tailscale, Docker, autologin
+#     6. hooks.post_install
+#   Inside the new system, as the first user (what used to be part 2)
+#     7. yay, then every AUR package: AUR GPU drivers and browsers, packages.aur
+#     8. parapsychic_mode
+#     9. autostart.services and autostart.apps
+#    10. hooks.post_setup
+#   Then this file is copied to /etc/2lazy4arch/config.yaml with secrets
+#   stripped, the log to /var/log/2lazy4arch.log, and `finish` runs.
+#   On first boot, once the network is up
+#    11. Tailscale joins your tailnet
+#    12. Docker logs in to registries, pulls and starts the containers
+#
+#   Steps 7–10 run with a temporary passwordless sudo rule for the first user,
+#   which is removed afterwards even if a step fails. Any failure stops the install
+#   and skips `finish`; the log is at /var/log/2lazy4arch.log on the ISO.
+#
+#   "Secrets" are every password, the Tailscale key and registry logins.
+#   They only live where the system needs them (NetworkManager's root-only
+#   connection files, for example). Container settings are kept as written.
+#
+# Checked before any disk is touched (on top of what the schema checks)
+#   • `disk: auto` finds exactly one internal disk
+#   • a root partition can be worked out, and every partition reference
+#     resolves to exactly one partition
+#   • no partition is used for two mounts, no mountpoint is used twice
+#   • `size: rest` is only on the last new partition of a disk
+#   • usernames are unique and none of them is `root`
+#   • someone can run the machine: at least one admin user, or a root password
+#   • `autologin`, `as:` and every `users:` list name users that exist
+#   • `listen: tailscale` has remote.tailscale turned on
+#   • VNC has a desktop to show
+#   • every file named anywhere in here exists
+#   • the machine booted in UEFI mode, new partitions fit in the space there is
+#   • mirrors, timezone and locale exist; network interfaces exist (wifi needs wifi)
+
+version: 1
+
+finish: reboot                    # reboot | poweroff | stay (drop to the ISO shell)
+                                  # default: reboot
+
+
+# ── Storage (required) ───────────────────────────────────────────────────────
+# Partitions are referred to the way fstab does:
+#   /dev/nvme0n1p2   PARTLABEL=arch-root   PARTUUID=…   UUID=…   LABEL=…
+#
+# This example: one NVMe that already has Windows plus some unallocated space.
+# Arch gets its own EFI partition and a separate /home, and GRUB adds Windows
+# to its menu.
+storage:
+  # Leave `partitioning` out to use the partitions already on disk; root is
+  # then required.
+  partitioning:
+    - disk: /dev/nvme0n1          # or `auto`: the only internal disk (stops if there are several)
+                                  # /dev/disk/by-id/… is safer: nvme0/nvme1 can swap between boots
+      wipe: false                 # false: add to free space, existing partitions untouched
+                                  # true:  new empty GPT table — EVERYTHING on the disk is lost
+                                  # default: false
+      add:                        # default: arch-efi (efi, 1GiB) + arch-root (linux, rest)
+        - name: arch-efi          # GPT name, so below it's PARTLABEL=arch-efi
+          type: efi               # efi | linux
+          size: 1GiB              # MiB | GiB | TiB, or `rest` (last partition only)
+        - name: arch-root
+          type: linux
+          size: 100GiB
+        - name: arch-home
+          type: linux
+          size: rest
+
+  efi:                            # mounted at /boot
+    partition: auto               # default: auto = the EFI partition made above,
+                                  # else the first "EFI System" partition found
+    format: auto                  # auto | keep | format (FAT32)
+                                  # default: auto = format if blank, keep if it has a filesystem
+
+  root:                           # always formatted as ext4
+    partition: PARTLABEL=arch-root    # default: the first linux partition made above
+
+  home:
+    partition: PARTLABEL=arch-home    # default: none, /home stays on root
+    format: auto                  # auto | keep | format (ext4); same rule as efi
+
+  other:                          # default: none. Never formatted, so each needs a filesystem already
+    - partition: /dev/nvme0n1p3   # Windows C:
+      mountpoint: /mnt/windows
+
+  swap: 8                         # swap file in GB: none | 1 | 2 | 4 | 8 | 16 | 32 | 64
+                                  # default: 4
+
+
+# ── System ───────────────────────────────────────────────────────────────────
+mirrors: India                    # a country from the wizard's list
+                                  # default: auto = keep the mirror list the ISO made at boot
+timezone: Asia/Kolkata            # default: UTC
+locale: en_US.UTF-8               # default: en_US.UTF-8
+
+hostname: tuf                     # lowercase letters, digits, -     default: archlinux
+
+# At least one user is required. The first one is the main user: AUR packages
+# are built as them, hooks run as them by default, and it's their dotfiles
+# parapsychic_mode sets up when it's just `true`.
+users:
+  - name: parapsychic             # lowercase letters, digits, - and _; starts with a letter or _
+    password_hash: "$6$REPLACE_ME"    # required: password_hash (from `openssl passwd -6`)
+                                  # or password (clear text)
+    admin: true                   # in wheel, so sudo / doas work, and in the docker group
+                                  # default: true for the first user, false for the rest
+    full_name: Para Psychic       # default: none
+    shell: zsh                    # bash | zsh | fish        default: bash
+    groups: [video, input]        # extra groups. default: none
+    ssh_keys:                     # put in ~/.ssh/authorized_keys. default: none
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREPLACE_ME me@laptop
+    # github: parapsychic         # also add the keys at github.com/<user>.keys
+
+  - name: alice
+    password: REPLACE_ME
+    admin: true                   # any number of users can be admins
+
+  - name: guest
+    password: REPLACE_ME          # admin defaults to false after the first user
+
+# root_password_hash / root_password: default is a locked root account;
+# admins use sudo or doas.
+
+autologin: parapsychic            # log this user straight into the desktop at boot
+                                  # default: none
+
+bootloader: grub                  # grub (also boots other OSes) | systemd-boot
+                                  # default: grub
+admin_tool: sudo                  # sudo | doas (sudo stays set up either way)
+                                  # default: sudo
+
+
+# ── Hardware ─────────────────────────────────────────────────────────────────
+hardware:
+  microcode: auto                 # auto | intel | amd | none        default: auto
+  gpu: auto                       # default: auto
+  # auto: a driver for every GPU found
+  #   NVIDIA Turing (GTX 16xx / RTX) and newer  → nvidia
+  #   NVIDIA Maxwell to Volta (GTX 9xx / 10xx)  → nvidia-legacy
+  #   older NVIDIA                              → nouveau
+  #   AMD → amd     Intel → Intel drivers
+  #   The NVIDIA generation comes from the PCI device ID: 0x1E00 and up is
+  #   Turing or newer, 0x1340–0x1DFF is Maxwell to Volta.
+  # none: no GPU drivers at all, Intel included (VMs, servers)
+  # Or a list, installed whether or not that GPU is present:
+  #   nvidia          nvidia-open
+  #   nvidia-legacy   nvidia-580xx (AUR)
+  #   nouveau         open-source NVIDIA driver
+  #   amd             Mesa
+  #   amd-pro         Mesa + AMDGPU PRO (AUR)
+  # At most one NVIDIA and one AMD entry. Intel graphics are still added when
+  # an Intel GPU is found, and a hybrid laptop on nvidia or nvidia-legacy gets
+  # nvidia-prime for prime-run.
+  #   gpu: [nvidia, amd]
+
+
+# ── Desktop ──────────────────────────────────────────────────────────────────
+desktop: hyprland                 # dwm | hyprland | kde | gnome | xfce | lxde | none (console only)
+                                  # default: none
+                                  # its login screen comes with it: lightdm (dwm, xfce),
+                                  # sddm (hyprland), Plasma Login (kde), gdm (gnome), lxdm (lxde)
+browser: firefox                  # firefox | librewolf | chromium | vivaldi | none
+                                  # brave | zen | chrome (AUR)
+                                  # default: firefox with a desktop, none without
+
+
+# Everything below is empty or off by default.
+
+# ── Network ──────────────────────────────────────────────────────────────────
+# Saved as NetworkManager connections. The ISO uses the same list to get
+# online for the install, so wifi and PPPoE work unattended too.
+# Default: DHCP on any ethernet port, DNS from DHCP.
+network:
+  connections:
+    - name: home                  # the connection's name in NetworkManager
+      type: wifi                  # ethernet | wifi | pppoe
+      ssid: Home-5G
+      password: REPLACE_ME        # passphrase, or the 64-hex PSK from wpa_passphrase
+      security: wpa-psk           # wpa-psk (WPA2) | sae (WPA3) | owe | open | eap
+                                  # default: wpa-psk with a password, open without
+      priority: 10                # higher wins when several are in range. default: 0
+      # hidden: true              # the SSID isn't broadcast. default: false
+      # autoconnect: false        # default: true
+      # mac: stable               # permanent | stable | random | a fixed address
+                                  # default: permanent
+
+    # Enterprise wifi (eduroam, office networks)
+    # - name: office
+    #   type: wifi
+    #   ssid: CorpNet
+    #   security: eap
+    #   eap:
+    #     method: peap            # peap | ttls | tls
+    #     identity: me@corp.example
+    #     password: REPLACE_ME    # peap / ttls
+    #     phase2: mschapv2        # peap / ttls: mschapv2 | mschap | pap | chap | gtc
+    #     ca_cert: ./certs/corp-ca.pem
+    #     domain: radius.corp.example   # server certificate must match this
+    #     # tls instead: client_cert, private_key, private_key_password
+
+    - name: wired
+      type: ethernet
+      interface: enp3s0           # default: any ethernet port
+      ipv4:                       # auto (DHCP) | disabled | a static setup like this
+        method: manual
+        address: 192.168.1.50/24
+        gateway: 192.168.1.1
+        dns: [192.168.1.1]        # replaces the DNS this connection would get from DHCP
+      ipv6: auto                  # same shape as ipv4. default: auto
+
+    # PPPoE straight from a bridged modem / ONT
+    # - name: isp
+    #   type: pppoe
+    #   interface: enp3s0         # the port the modem is plugged into (required)
+    #   vlan: 100                 # if your ISP tags PPPoE traffic. default: none
+    #   username: user@isp
+    #   password: REPLACE_ME
+    #   mtu: 1492                 # default: 1492
+
+  dns:
+    servers: [1.1.1.1, 9.9.9.9]   # used on every connection over DHCP's. default: DHCP's
+    over_tls: opportunistic       # off | opportunistic | strict; turns on systemd-resolved
+                                  # default: off
+    search: [lan]                 # search domains. default: none
+
+  hosts:                          # extra /etc/hosts lines
+    192.168.1.20: [nas, nas.lan]
+
+  # proxy:                        # written to /etc/environment and used for the install
+  #   http: http://proxy.corp.example:3128
+  #   https: http://proxy.corp.example:3128
+  #   no_proxy: localhost,127.0.0.1,.lan
+
+
+# ── Remote access ────────────────────────────────────────────────────────────
+remote:
+  ssh:
+    enable: true                  # OpenSSH, enabled at boot
+    port: 22                      # default: 22
+                                  # keys are per user: users[].ssh_keys / users[].github
+    # password_login: false       # true: everyone can use a password
+                                  # false: keys only, so users without keys can't SSH in
+                                  # default: users with keys need them, the rest use passwords
+    root_login: false             # default: false
+    listen: tailscale             # everywhere | tailscale (a firewall rule only lets the port
+                                  # in on the Tailscale interface). default: everywhere
+
+  vnc:
+    enable: true                  # needs a desktop
+    port: 5900                    # default: 5900
+    password: REPLACE_ME          # required. Classic VNC auth only uses the first 8 characters
+    view_only: false              # default: false
+    listen: tailscale             # everywhere | tailscale. VNC isn't encrypted, so keep it on
+                                  # Tailscale or a trusted LAN. default: everywhere
+    # The server depends on the desktop:
+    #   dwm, xfce, lxde   x11vnc as a system service; it shows the login screen too
+    #   hyprland          wayvnc, started with each user's session; log in with your
+    #                     username and this password (RSA-AES: TigerVNC 1.13+, RealVNC)
+    #   gnome             gnome-remote-desktop's VNC, set up at each user's first login;
+    #                     its password lives in the keyring, so with autologin GNOME
+    #                     may ask once to unlock it
+    #   kde               krfb with unattended access, started with each user's session,
+    #                     password in krfbrc instead of KWallet; Plasma on Wayland may
+    #                     still ask to approve a connection on screen
+    # "Started with each user's session" means nothing to connect to after a
+    # reboot until someone logs in, so set `autologin` for a headless machine.
+
+  tailscale:
+    enable: true
+    auth_key: tskey-auth-REPLACE_ME   # joins your tailnet on first boot, then the key is deleted.
+                                  # Without one, run `sudo tailscale up` yourself
+    hostname: tuf                 # name in the tailnet. default: hostname
+    ssh: false                    # Tailscale SSH, authorised by tailnet ACLs instead of keys
+    accept_routes: false
+    advertise_exit_node: false
+    advertise_routes: []          # e.g. [192.168.1.0/24]
+
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+# Names that don't exist are skipped and listed at the end of the log.
+packages:
+  multilib: false                 # enable [multilib] for steam, wine, lib32-*
+                                  # (parapsychic_mode turns it on regardless)
+  pacman:                         # installed with the base set
+    - git
+    - neovim
+    - discord
+    - network-manager-applet
+  aur:                            # installed with yay
+    - visual-studio-code-bin
+  # One name per line, the same files part 2 used to take. Merged with the lists above.
+  # pacman_list: ./pkglist.txt
+  # aur_list: ./aurlist.txt
+
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Anything here installs Docker and Compose, enables docker.service and adds
+# every admin to the docker group (others can get it with `groups: [docker]`;
+# it's as good as root). Images can't be pulled during the install, so
+# a one-time service pulls and starts everything on first boot. After that,
+# `restart: unless-stopped` brings the containers back on every boot.
+docker:
+  # login:                        # private registries, logged in before pulling
+  #   - registry: ghcr.io         # default: Docker Hub
+  #     username: parapsychic
+  #     password: REPLACE_ME      # or an access token
+
+  containers:                     # docker compose services, written as-is into
+                                  # /etc/2lazy4arch/docker/compose.yaml; any compose key works
+    uptime-kuma:
+      image: louislam/uptime-kuma:1
+      ports: ["3001:3001"]
+      volumes: ["/srv/uptime-kuma:/app/data"]
+      # restart: unless-stopped   # added when left out
+    postgres:
+      image: postgres:17
+      environment:
+        POSTGRES_PASSWORD: REPLACE_ME
+      volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  volumes:                        # named volumes and networks the containers use
+    pgdata: {}                    # (compose's top-level `volumes:` and `networks:`)
+  # networks:
+  #   backend: {}
+
+  # compose_files:                # your own compose files, each copied with its folder
+  #   - ./stacks/media/compose.yaml   # and started with `docker compose up -d`
+
+
+# ── Autostart ────────────────────────────────────────────────────────────────
+autostart:
+  services:                       # systemd units to enable; ".service" can be left off
+    - fstrim.timer
+  apps:                           # started when a user logs in
+    - name: discord
+      command: discord --start-minimized
+      users: [parapsychic, alice] # default: every user
+    - command: nm-applet --indicator    # name defaults to the command's first word
+  # Where apps are written for each user, by desktop:
+  #   kde, gnome, xfce, lxde   ~/.config/autostart/<name>.desktop
+  #   hyprland                 hl.exec_cmd lines in ~/.config/hypr/2lazy4arch.lua,
+  #                            required from hyprland.lua (Hyprland is configured in Lua)
+  #   dwm                      ~/.xprofile (lightdm runs it before dwm starts)
+  #   none                     a systemd user service per app
+
+
+# ── Custom code ──────────────────────────────────────────────────────────────
+# Each step is `run:` (inline, run with bash -e) or `script:` (a file, run with
+# its own shebang). Optional: `name:` for the log, and `on_error: stop | continue`
+# (default stop, so a failing pre_install step halts before any disk is touched).
+#
+# Environment for every step:
+#   LAZY_USER     the first user          LAZY_USERS     every user, space-separated
+#   LAZY_HOME     the first user's home   LAZY_ADMINS    every admin, space-separated
+#   LAZY_DESKTOP  the desktop key above   LAZY_DIR       folder holding this file
+#   LAZY_ROOT     the new system's root: /mnt from the ISO, / inside it
+hooks:
+  pre_install:                    # on the ISO before partitioning, as root
+    - name: sync the clock
+      run: timedatectl set-ntp true
+
+  post_install:                   # after step 5, inside the new system unless chroot: false
+    - name: lower swappiness
+      run: echo "vm.swappiness=10" > /etc/sysctl.d/99-swappiness.conf
+    - name: keep the ISO's log
+      chroot: false               # runs on the ISO; the new system is at $LAZY_ROOT
+      run: journalctl -b > "$LAZY_ROOT/var/log/2lazy4arch-iso.log"
+    # - script: ./scripts/tweaks.sh
+    #   as: alice                 # root (default) or any user — inside the new system only
+
+  post_setup:                     # the very end, inside the new system. Runs as the first
+                                  # user by default, with passwordless sudo; `as:` takes
+                                  # root or any user
+    - name: git defaults
+      run: git config --global init.defaultBranch main
+      on_error: continue
+
+
+# ── Rice ─────────────────────────────────────────────────────────────────────
+parapsychic_mode: false           # custom dwm/dmenu builds, multilib, pacman colour and
+                                  # candy, touchpad config, plus dotfiles for:
+                                  #   true → the first user    [alice, guest] → those users
+                                  # default: false

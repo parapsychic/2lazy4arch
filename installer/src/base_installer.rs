@@ -3,16 +3,12 @@ use std::{fs::OpenOptions, io::Write};
 use anyhow::{anyhow, Result};
 use shell_iface::{logger::Logger, Shell};
 
-use crate::{pacman::Pacman, utils::get_processor_make};
+use crate::pacman::Pacman;
 
-/// What pacstrap installs.
-pub fn base_packages() -> Vec<&'static str> {
+/// What pacstrap installs, plus the microcode package if any.
+pub fn base_packages(microcode: Option<&'static str>) -> Vec<&'static str> {
     let mut packages = vec!["base", "linux", "linux-firmware", "neovim", "reflector"];
-    match get_processor_make().as_deref() {
-        Some("amd") => packages.push("amd-ucode"),
-        Some("intel") => packages.push("intel-ucode"),
-        _ => {}
-    }
+    packages.extend(microcode);
     packages
 }
 
@@ -29,9 +25,9 @@ impl<'a> BaseInstaller<'a> {
     }
 
     /// Installs the base packages
-    pub fn base_packages_install(&mut self) -> Result<()> {
+    pub fn base_packages_install(&mut self, packages: &[&str]) -> Result<()> {
         self.shell.log("Installing base packages.");
-        let packages = self.pacman.keep_available(&base_packages())?;
+        let packages = self.pacman.keep_available(packages)?;
 
         match self
             .shell

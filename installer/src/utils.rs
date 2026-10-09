@@ -1,13 +1,14 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    os::fd::AsRawFd,
+    process::{Child, Command, Stdio},
 };
 
 use anyhow::{anyhow, Result};
 
-pub const INSTALL_SUCCESS_FLAG: &str = "/var/tmp/2lazy4archinstallationflag";
-/// AUR packages picked in part 1, installed by part 2 once yay exists.
-pub const AUR_QUEUE: &str = "/var/tmp/2lazy4arch-aur-queue";
+/// Everything the install prints, on the ISO; copied into the new system at the end.
+pub const LOG_FILE: &str = shell_iface::logger::LOG_FILE;
 
 /// Writes the content, replacing the file if it exists.
 pub fn write_to_file(path: &str, content: &str) -> Result<()> {
@@ -36,44 +37,9 @@ pub fn get_processor_make() -> Option<String> {
     None
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum GpuVendor {
-    Intel,
-    Amd,
-    Nvidia,
-    /// VMs, server BMCs, ... Mesa covers these.
-    Other,
-}
-
-/// GPUs on the PCI bus, deduplicated by vendor.
-pub fn detect_gpus() -> Vec<GpuVendor> {
-    let mut gpus = vec![];
-    for dev in fs::read_dir("/sys/bus/pci/devices").into_iter().flatten().flatten() {
-        let read = |f: &str| fs::read_to_string(dev.path().join(f)).unwrap_or_default();
-        // PCI class 0x03xxxx = display controller
-        if !read("class").starts_with("0x03") {
-            continue;
-        }
-        let vendor = match read("vendor").trim() {
-            "0x8086" => GpuVendor::Intel,
-            "0x1002" => GpuVendor::Amd,
-            "0x10de" => GpuVendor::Nvidia,
-            _ => GpuVendor::Other,
-        };
-        if !gpus.contains(&vendor) {
-            gpus.push(vendor);
-        }
-    }
-    gpus
-}
-
-/// Get UUID of root
-/// This might fail if:
-/// - the fstab is not generated
-/// - the fstab is not generated with UUIDs using genfstab
-/// - the root's UUID is not in fstab
-pub fn get_uuid_root() -> Result<String> {
-    let fstab = fs::read_to_string("/etc/fstab").map_err(|_| anyhow!("Could not open fstab"))?;
+/// Root's UUID from an fstab written by genfstab -U.
+pub fn get_uuid_root(fstab_path: &str) -> Result<String> {
+    let fstab = fs::read_to_string(fstab_path).map_err(|_| anyhow!("Could not open {fstab_path}"))?;
     fstab
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
@@ -93,6 +59,16 @@ pub fn is_valid_mount_point(name: &str) -> bool {
                 && part != ".."
                 && part.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
         })
+}
+
+/// From here on, stdout and stderr (ours and every command's) also go to `path`.
+/// Keep the returned tee alive until the end.
+pub fn tee_output(path: &str) -> Result<Child> {
+    let tee = Command::new("tee").args(["-a", path]).stdin(Stdio::piped()).spawn()?;
+    let fd = tee.stdin.as_ref().ok_or_else(|| anyhow!("tee has no stdin"))?.as_raw_fd();
+    nix::unistd::dup2(fd, 1)?;
+    nix::unistd::dup2(fd, 2)?;
+    Ok(tee)
 }
 
 #[cfg(test)]
