@@ -60,9 +60,22 @@ static STEPS: AtomicUsize = AtomicUsize::new(0);
 /// Announces a step. The terminal title carries "2lazy4arch <n>/<total> <msg>",
 /// which the TUI reads for its progress bar (a plain terminal just shows it).
 pub fn step(msg: &str) {
+    finish_step();
     let n = STEP.fetch_add(1, Ordering::Relaxed) + 1;
     let total = STEPS.load(Ordering::Relaxed).max(n);
-    println!("\n\x1b]0;2lazy4arch {n}/{total} {msg}\x07\x1b[1;36m==>\x1b[0m \x1b[1m{msg}\x1b[0m");
+    print!("\x1b]0;2lazy4arch {n}/{total} {msg}\x07");
+    shell_iface::print_event("STEP", 36, msg);
+    *CURRENT.lock().unwrap() = msg.to_string();
+}
+
+/// The step that's running, for its OK line.
+static CURRENT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn finish_step() {
+    let done = std::mem::take(&mut *CURRENT.lock().unwrap());
+    if !done.is_empty() {
+        shell_iface::print_event("OK", 32, &done);
+    }
 }
 
 /// How many step() calls an install of `cfg` makes.
@@ -77,6 +90,8 @@ fn count_steps(cfg: &Config, packages: &config::PackageSet) -> usize {
 pub fn install(job: &Install, confirm_missing: &dyn Fn(&[String]) -> bool) -> Result<Summary> {
     let Install { cfg, sys, source, logger, .. } = *job;
     STEPS.store(count_steps(cfg, &cfg.packages(&sys.gpus)), Ordering::Relaxed);
+    shell_iface::set_secrets(cfg.secrets());
+    shell_iface::echo_commands(true);
 
     step("Getting online");
     network::apply_proxy(cfg);
@@ -191,6 +206,7 @@ pub fn install(job: &Install, confirm_missing: &dyn Fn(&[String]) -> bool) -> Re
     let _ = fs::remove_file(target::path(SKIPPED_FILE));
     skipped.sort();
     skipped.dedup();
+    finish_step();
     Ok(Summary { skipped })
 }
 

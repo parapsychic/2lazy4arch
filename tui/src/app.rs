@@ -7,7 +7,7 @@ use installer::{
     },
     essentials::{Bootloader, SuperUserUtility},
     filesystem_tasks::Filesystem,
-    system::{human_size, lsblk, BlockDevice, GpuVendor, System},
+    system::{lsblk, BlockDevice, GpuVendor, System},
     utils::is_valid_mount_point,
     validate,
 };
@@ -17,6 +17,7 @@ use shell_iface::{logger::Logger, Shell};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
+    Welcome,
     Partition,
     Boot,
     FormatBoot,
@@ -45,7 +46,11 @@ pub enum Step {
     Review,
 }
 
-pub const STEPS: [Step; 26] = [
+/// In stage order (see STAGES).
+pub const STEPS: [Step; 27] = [
+    Step::Welcome,
+    Step::Wifi,
+    Step::Mirrors,
     Step::Partition,
     Step::Boot,
     Step::FormatBoot,
@@ -54,20 +59,18 @@ pub const STEPS: [Step; 26] = [
     Step::FormatHome,
     Step::ExtraMounts,
     Step::Swap,
-    Step::Mirrors,
+    Step::Bootloader,
+    Step::Nvidia,
+    Step::Amd,
     Step::Timezone,
     Step::Locale,
     Step::Accounts,
     Step::Shell,
     Step::MoreUsers,
-    Step::Bootloader,
     Step::Privilege,
-    Step::Nvidia,
-    Step::Amd,
-    Step::Desktop,
     Step::Autologin,
+    Step::Desktop,
     Step::Browser,
-    Step::Wifi,
     Step::Extras,
     Step::Packages,
     Step::Finish,
@@ -150,26 +153,6 @@ fn index_of<T: PartialEq + Copy>(table: &[(T, &str)], value: T) -> usize {
     table.iter().position(|(v, _)| *v == value).unwrap_or(0)
 }
 
-/// "sda       [SATA]   512G  GPT    Samsung SSD 870"
-pub fn disk_row(disk: &BlockDevice) -> String {
-    let tag = match disk.tran.as_deref() {
-        Some("nvme") => "NVMe".to_string(),
-        Some("sata") => "SATA".into(),
-        Some("usb") => "USB".into(),
-        Some(other) => other.to_uppercase(),
-        None if disk.name().starts_with("vd") => "virtio".into(),
-        None => "disk".into(),
-    };
-    let table = match disk.pttype.as_deref() {
-        Some("gpt") => "GPT".to_string(),
-        Some("dos") => "MBR".into(),
-        Some(other) => other.to_uppercase(),
-        None => "empty".into(),
-    };
-    let size = disk.size.map(human_size).unwrap_or_default();
-    format!("{:<9} {:<8} {size:>6}  {table:<5}  {}", disk.name(), format!("[{tag}]"), disk.model.as_deref().unwrap_or("").trim())
-}
-
 /// "" -> "/", "boot" -> "/boot"
 pub fn show_mount(key: &str) -> String {
     format!("/{key}")
@@ -197,14 +180,30 @@ impl Field {
 
 /// Groups of steps, as the sidebar shows them. The install itself is the last stage.
 pub const STAGES: [(&str, &[Step]); 7] = [
-    ("Disks", &[Step::Partition, Step::Boot, Step::FormatBoot, Step::Root, Step::Home, Step::FormatHome, Step::ExtraMounts, Step::Swap]),
-    ("Mirrors & locale", &[Step::Mirrors, Step::Timezone, Step::Locale]),
-    ("Users", &[Step::Accounts, Step::Shell, Step::MoreUsers]),
-    ("Boot & drivers", &[Step::Bootloader, Step::Privilege, Step::Nvidia, Step::Amd]),
-    ("Desktop & apps", &[Step::Desktop, Step::Autologin, Step::Browser, Step::Packages]),
-    ("Network & extras", &[Step::Wifi, Step::Extras]),
-    ("Summary", &[Step::Finish, Step::Review]),
+    ("Welcome & HW", &[Step::Welcome]),
+    ("Network & Mirrors", &[Step::Wifi, Step::Mirrors]),
+    ("Partitioning", &[Step::Partition, Step::Boot, Step::FormatBoot, Step::Root, Step::Home, Step::FormatHome, Step::ExtraMounts, Step::Swap]),
+    ("Bootloader & Kern", &[Step::Bootloader, Step::Nvidia, Step::Amd]),
+    ("User & Hostname", &[Step::Timezone, Step::Locale, Step::Accounts, Step::Shell, Step::MoreUsers, Step::Privilege, Step::Autologin]),
+    ("Desktop & Pkgs", &[Step::Desktop, Step::Browser, Step::Extras, Step::Packages]),
+    ("Summary & Base", &[Step::Finish, Step::Review]),
 ];
+
+/// The sidebar while installing: which installer steps (by name, see installer::step) belong to each stage.
+pub const INSTALL_STAGES: [(&str, &[&str]); 7] = [
+    ("Welcome & HW", &[]),
+    ("Network & Mirrors", &["Getting online", "pre_install hooks", "Mirrors", "Checking packages"]),
+    ("Partitioning", &["Partitions"]),
+    ("Base & Pacstrap", &["Installing the base system", "Swap, timezone", "Installing drivers"]),
+    ("Bootloader & Kern", &["Bootloader"]),
+    ("User & Desktop", &["Users", "Network, remote access", "post_install hooks", "AUR packages", "ParaPsychic rice", "Autostart"]),
+    ("System Finalize", &["post_setup hooks"]),
+];
+
+/// Which INSTALL_STAGES entry a task belongs to.
+pub fn install_stage(task: &str) -> usize {
+    INSTALL_STAGES.iter().position(|(_, tasks)| tasks.iter().any(|t| task.starts_with(t))).unwrap_or(1)
+}
 
 pub fn stage_of(step: Step) -> usize {
     STAGES.iter().position(|(_, steps)| steps.contains(&step)).unwrap_or(0)
@@ -232,6 +231,11 @@ pub struct App<'a> {
     pub done: Vec<Step>,
     /// Declarative --config-file preview: only the review, nothing to go back to
     pub preview: bool,
+    /// Tab moves focus to the stage list, where enter jumps to a stage already reached
+    pub stages_focused: bool,
+    pub stage_cursor: usize,
+    /// "/" started a search; keys type into the filter
+    pub filtering: bool,
     /// Why the review can't install, from the same checks --config-file runs
     pub problems: Vec<String>,
     pub scroll: u16,
@@ -263,7 +267,7 @@ impl<'a> App<'a> {
             cfg.hardware.gpu = GpuChoice::List(drivers);
         }
         let mut app = App {
-            step: Step::Partition,
+            step: Step::Welcome,
             list: ListState::default(),
             filter: String::new(),
             form: vec![],
@@ -272,6 +276,9 @@ impl<'a> App<'a> {
             error: None,
             done: vec![],
             preview: false,
+            stages_focused: false,
+            stage_cursor: 0,
+            filtering: false,
             problems: vec![],
             scroll: 0,
             cfg,
@@ -280,7 +287,7 @@ impl<'a> App<'a> {
             install: None,
             logger,
         };
-        app.enter(Step::Partition);
+        app.enter(Step::Welcome);
         app
     }
 
@@ -354,8 +361,15 @@ impl<'a> App<'a> {
         matches!(self.step, Step::Accounts | Step::Wifi | Step::Packages) || matches!(self.sub, Some(Sub::Mount(_) | Sub::NewUser { .. } | Sub::Extra(_)))
     }
 
-    pub fn filterable(&self) -> bool {
+    /// Long lists start out searching: just type.
+    fn starts_filtering(&self) -> bool {
         matches!(self.step, Step::Mirrors | Step::Timezone | Step::Locale)
+    }
+
+    /// Stages up to the furthest one reached so far.
+    pub fn reachable(&self, stage: usize) -> bool {
+        let furthest = self.done.iter().map(|s| stage_of(*s) + 1).max().unwrap_or(0).max(stage_of(self.step));
+        stage <= furthest && !STAGES[stage].1.iter().all(|s| self.skipped(*s))
     }
 
     pub fn extra_on(&self, extra: Extra) -> bool {
@@ -410,9 +424,10 @@ impl<'a> App<'a> {
                 .sys
                 .disks()
                 .into_iter()
-                .map(disk_row)
-                .chain(std::iter::once("-> Continue with the partitions as they are".to_string()))
+                .map(|d| format!("{} {}", d.name(), d.model.as_deref().unwrap_or("").trim()))
+                .chain(["-> Continue (to select the boot partition)".to_string(), "[R] Rescan storage devices".to_string()])
                 .collect(),
+            Step::Welcome => labels(&["-> Start"]),
             Step::Boot | Step::Root => partitions(None),
             Step::Home => partitions(Some("No separate /home partition")),
             Step::ExtraMounts => partitions(Some("Done, continue")),
@@ -467,6 +482,7 @@ impl<'a> App<'a> {
         self.filter.clear();
         self.sub = None;
         self.scroll = 0;
+        self.filtering = self.starts_filtering();
         let c = &self.cfg;
         let main = c.users.first().cloned().unwrap_or_default();
         let selected = match step {
@@ -561,7 +577,13 @@ impl<'a> App<'a> {
             return Action::Quit;
         }
         self.error = None;
-        let result = if self.is_form() {
+        let result = if self.stages_focused {
+            Ok(self.stages_key(key))
+        } else if key.code == KeyCode::Tab && !self.is_form() && !self.preview {
+            self.stages_focused = true;
+            self.stage_cursor = stage_of(self.step);
+            Ok(Action::None)
+        } else if self.is_form() {
             self.form_key(key)
         } else if self.step == Step::Review {
             self.review_key(key)
@@ -572,6 +594,23 @@ impl<'a> App<'a> {
             self.error = Some(e.to_string());
             Action::None
         })
+    }
+
+    fn stages_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.stage_cursor = self.stage_cursor.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => self.stage_cursor = (self.stage_cursor + 1).min(STAGES.len() - 1),
+            KeyCode::Enter if self.reachable(self.stage_cursor) => {
+                if let Some(&first) = STAGES[self.stage_cursor].1.iter().find(|s| !self.skipped(**s)) {
+                    self.enter(first);
+                }
+                self.stages_focused = false;
+            }
+            KeyCode::Enter => self.error = Some("Finish the stages before it first.".into()),
+            KeyCode::Tab | KeyCode::Esc => self.stages_focused = false,
+            _ => {}
+        }
+        Action::None
     }
 
     fn review_key(&mut self, key: KeyEvent) -> Result<Action> {
@@ -607,7 +646,6 @@ impl<'a> App<'a> {
     fn list_key(&mut self, key: KeyEvent) -> Result<Action> {
         let visible = self.visible();
         let n = visible.len();
-        let filterable = self.filterable();
         let at = self.list.selected().unwrap_or(0);
         let wrap = |d: isize| ((at as isize + d).rem_euclid(n.max(1) as isize)) as usize;
         let clamp = |d: isize| (at as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
@@ -615,22 +653,27 @@ impl<'a> App<'a> {
         match key.code {
             KeyCode::Up => self.list.select(Some(wrap(-1))),
             KeyCode::Down => self.list.select(Some(wrap(1))),
-            KeyCode::Char('k') if !filterable => self.list.select(Some(wrap(-1))),
-            KeyCode::Char('j') if !filterable => self.list.select(Some(wrap(1))),
             KeyCode::PageUp => self.list.select(Some(clamp(-10))),
             KeyCode::PageDown => self.list.select(Some(clamp(10))),
             KeyCode::Home => self.list.select(Some(0)),
             KeyCode::End => self.list.select(Some(n.saturating_sub(1))),
-            KeyCode::Char(c) if filterable => {
+            KeyCode::Char(c) if self.filtering => {
                 self.filter.push(c);
                 self.list.select(Some(0));
             }
-            KeyCode::Backspace if filterable => {
+            KeyCode::Backspace if self.filtering => {
                 self.filter.pop();
                 self.list.select(Some(0));
             }
-            KeyCode::Esc if !self.filter.is_empty() => {
+            KeyCode::Char('/') => {
+                self.filtering = true;
+                self.list.select(Some(0));
+            }
+            KeyCode::Char('k') => self.list.select(Some(wrap(-1))),
+            KeyCode::Char('j') => self.list.select(Some(wrap(1))),
+            KeyCode::Esc if self.filtering && !self.starts_filtering() || !self.filter.is_empty() => {
                 self.filter.clear();
+                self.filtering = self.starts_filtering();
                 self.list.select(Some(0));
             }
             KeyCode::Esc if self.sub.is_some() => {
@@ -640,6 +683,7 @@ impl<'a> App<'a> {
             KeyCode::Esc => return Ok(self.go(false)),
             KeyCode::Enter => {
                 if let Some(&i) = visible.get(at) {
+                    self.filtering = self.starts_filtering();
                     return self.choose(i);
                 }
             }
@@ -673,15 +717,21 @@ impl<'a> App<'a> {
                         _ => return Ok(Action::None),
                     }
                 }
-                _ => match self.sys.disks().get(i) {
-                    Some(disk) => {
-                        self.sub = Some(Sub::Disk(disk.path.clone()));
+                _ => {
+                    let disks = self.sys.disks().len();
+                    if i < disks {
+                        self.sub = Some(Sub::Disk(self.sys.disks()[i].path.clone()));
                         self.list.select(Some(0));
                         return Ok(Action::None);
                     }
-                    None => self.cfg.storage.partitioning.clear(),
-                },
+                    if i > disks {
+                        self.refresh_devices();
+                        return Ok(Action::None);
+                    }
+                    self.cfg.storage.partitioning.clear();
+                }
             },
+            Step::Welcome => {}
             Step::Boot => self.filesystem.set("boot", partition(0).as_deref())?,
             Step::Root => self.filesystem.set("/", partition(0).as_deref())?,
             Step::Home => self.filesystem.set("home", partition(1).as_deref())?,
@@ -960,9 +1010,25 @@ mod tests {
     fn wizard_existing_partitions() {
         let logger = Logger::new(false);
         let mut app = App::with_system(&logger, machine());
-        let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(if std::env::var("WIDE").is_ok() { 120 } else { 80 }, if std::env::var("WIDE").is_ok() { 35 } else { 25 })).unwrap();
 
-        // sda -> cfdisk, then continue with its partitions
+        // Welcome & HW, then Network & Mirrors
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::Wifi);
+        typed(&mut app, "Home-5G");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "secret");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.step, Step::Mirrors);
+        typed(&mut app, "ind");
+        render(&mut app, &mut terminal);
+        assert_eq!(app.visible().len(), 2); // India, Indonesia
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.cfg.mirrors, "India");
+
+        // Partitioning: sda -> cfdisk, then continue with its partitions
+        assert_eq!(app.step, Step::Partition);
         render(&mut app, &mut terminal);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.sub, Some(Sub::Disk("/dev/sda".into())));
@@ -971,7 +1037,7 @@ mod tests {
         press(&mut app, KeyCode::Down);
         assert!(matches!(press(&mut app, KeyCode::Enter), Action::Partition(d) if d == "/dev/sda"));
         assert_eq!(app.sub, None);
-        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
 
         // EFI preselected, kept; root on the EFI partition is refused
@@ -1000,19 +1066,23 @@ mod tests {
         assert_eq!(app.cfg.storage.other[0].mountpoint, "/data");
         press(&mut app, KeyCode::Home);
         press(&mut app, KeyCode::Enter);
-
         press(&mut app, KeyCode::Enter); // swap
-        assert_eq!(app.step, Step::Mirrors);
-        typed(&mut app, "ind");
-        render(&mut app, &mut terminal);
-        assert_eq!(app.visible().len(), 2);
+
+        // Bootloader & Kern
+        assert_eq!(app.step, Step::Bootloader);
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.cfg.mirrors, "India");
-        press(&mut app, KeyCode::Enter); // timezone
+        assert_eq!(app.step, Step::Nvidia);
+        render(&mut app, &mut terminal);
+        assert_eq!(app.list.selected(), Some(0)); // GTX 1650 -> nvidia-open
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter); // AMD: Mesa
+
+        // User & Hostname
+        assert_eq!(app.step, Step::Timezone);
+        press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Up);
         press(&mut app, KeyCode::Enter); // locale en_IN
         assert_eq!(app.cfg.locale, "en_IN");
-
         assert_eq!(app.step, Step::Accounts);
         app.form[0].value.clear();
         typed(&mut app, "tuf");
@@ -1039,7 +1109,6 @@ mod tests {
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.cfg.users[0].shell, LoginShell::Zsh);
-
         // a second, non-admin user
         assert_eq!(app.step, Step::MoreUsers);
         press(&mut app, KeyCode::Down);
@@ -1053,25 +1122,17 @@ mod tests {
         assert_eq!(app.cfg.admins(), ["parapsychic"]);
         press(&mut app, KeyCode::Home);
         press(&mut app, KeyCode::Enter);
-
-        until(&mut app, Step::Nvidia);
-        render(&mut app, &mut terminal);
-        assert_eq!(app.list.selected(), Some(0)); // GTX 1650 -> nvidia-open
-        until(&mut app, Step::Desktop);
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.cfg.desktop, Desktop::Hyprland);
+        press(&mut app, KeyCode::Enter); // sudo
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.cfg.autologin.as_deref(), Some("parapsychic"));
-        press(&mut app, KeyCode::Enter); // firefox
 
-        assert_eq!(app.step, Step::Wifi);
-        typed(&mut app, "Home-5G");
-        press(&mut app, KeyCode::Tab);
-        typed(&mut app, "secret");
+        // Desktop & Pkgs
+        assert_eq!(app.step, Step::Desktop);
+        press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
-
+        assert_eq!(app.cfg.desktop, Desktop::Hyprland);
+        press(&mut app, KeyCode::Enter); // firefox
         // SSH with GitHub keys, VNC, Docker
         assert_eq!(app.step, Step::Extras);
         press(&mut app, KeyCode::Down);
@@ -1094,7 +1155,6 @@ mod tests {
         render(&mut app, &mut terminal);
         press(&mut app, KeyCode::Home);
         press(&mut app, KeyCode::Enter);
-
         assert_eq!(app.step, Step::Packages);
         typed(&mut app, "htop git");
         press(&mut app, KeyCode::Tab);
@@ -1117,8 +1177,15 @@ mod tests {
         }
         assert_eq!(p.aur, ["visual-studio-code-bin"]);
 
-        press(&mut app, KeyCode::Esc);
-        assert_eq!(app.step, Step::Finish);
+        // tab to the stages, back to Partitioning
+        press(&mut app, KeyCode::Tab);
+        assert!(app.stages_focused);
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Up);
+        }
+        render(&mut app, &mut terminal);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!((app.step, app.stages_focused), (Step::Partition, false));
     }
 
     #[test]
@@ -1126,6 +1193,19 @@ mod tests {
         let logger = Logger::new(false);
         let mut app = App::with_system(&logger, machine());
         let mut terminal = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        until(&mut app, Step::Partition);
+        // later stages can't be jumped to yet
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.error.is_some() && app.step == Step::Partition);
+        press(&mut app, KeyCode::Esc);
+        // search the disk list with /
+        press(&mut app, KeyCode::Char('/'));
+        typed(&mut app, "rescan");
+        assert_eq!(app.visible().len(), 1);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!((app.visible().len(), app.filtering), (3, false));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.step, Step::ExtraMounts);
@@ -1158,7 +1238,7 @@ mod tests {
         let mut big = Terminal::new(TestBackend::new(120, 35)).unwrap();
         render(&mut app, &mut small);
         let screen = render(&mut app, &mut big);
-        for expected in ["Installing the base system", "step 5/12", "(2/173) installing linux", "[STATUS: RUNNING]", "[ACTIVE]", "new arch-root"] {
+        for expected in ["Installing the base system", "Steps: 5/12", "(Step 4/7)", "(3/173 pkgs)", "(2/173) installing linux", "[STATUS: RUNNING]", "[ACTIVE]", "04. Base & Pacstrap", "PARTLABEL=arch-root"] {
             assert!(screen.contains(expected), "no {expected:?} in\n{screen}");
         }
         for _ in 0..30 {

@@ -1,7 +1,7 @@
 use installer::{
     config::{Config, ConnectionType, GpuDriver, IpMethod, Listen},
     storage::{self, Part},
-    system::{GpuVendor, System},
+    system::{BlockDevice, GpuVendor, System},
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -13,14 +13,30 @@ use ratatui::{
 
 use crate::{
     app::*,
-    term::{draw_screen, Status},
+    term::{draw_screen, Install, Status},
 };
 
-// Plain characters only: the Linux console's font has box drawing, not much else.
+// 16 colours and plain characters: the Linux console's font has box drawing, not much else.
+const BORDER: Color = Color::Cyan;
 const ACCENT: Color = Color::Cyan;
+const TITLE: Color = Color::Yellow;
 const DIM: Color = Color::DarkGray;
+const KEY_WORD: Color = Color::LightRed;
+const SELECTED: Style = Style::new().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+
+fn dim(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::new().fg(DIM))
+}
+
+fn boxed() -> Block<'static> {
+    Block::default().borders(Borders::ALL).border_style(Style::new().fg(BORDER))
+}
+
+fn titled(title: String) -> Block<'static> {
+    boxed().title(Span::styled(title, Style::new().fg(ACCENT).bold()))
+}
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let status = status(app);
@@ -29,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     header(f, rows[0], app);
 
     let main = if rows[1].width >= 72 && !(app.preview && app.install.is_none()) {
-        let cols = split(Direction::Horizontal, rows[1], [Constraint::Length(30), Constraint::Min(0)]);
+        let cols = split(Direction::Horizontal, rows[1], [Constraint::Length(32), Constraint::Min(0)]);
         sidebar(f, cols[0], app);
         cols[1]
     } else {
@@ -53,61 +69,89 @@ fn split<const N: usize>(direction: Direction, area: Rect, constraints: [Constra
 }
 
 /// "[=====>----]"
-fn bar(width: usize, done: f64) -> String {
+fn bar(width: usize, done: f64, fill: char, empty: char) -> String {
     let done = done.clamp(0.0, 1.0);
     let filled = (done * width as f64).round() as usize;
-    let inner = if filled >= width { "=".repeat(width) } else if filled == 0 { "-".repeat(width) } else { format!("{}>{}", "=".repeat(filled - 1), "-".repeat(width - filled)) };
+    let inner = if filled >= width {
+        fill.to_string().repeat(width)
+    } else if filled == 0 || fill != '=' {
+        format!("{}{}", fill.to_string().repeat(filled), empty.to_string().repeat(width - filled))
+    } else {
+        format!("{}>{}", "=".repeat(filled - 1), empty.to_string().repeat(width - filled))
+    };
     format!("[{inner}]")
 }
 
-/// Overall progress: the wizard's stages, then the install's steps as the last stage.
+/// How far the install has got, 0 to 1, from its step count.
+fn install_done(install: &Install) -> f64 {
+    let (step, total, _) = install.progress();
+    match install.status {
+        Status::Finished(true) => 1.0,
+        _ if total == 0 => 0.0,
+        _ => step.saturating_sub(1) as f64 / total as f64,
+    }
+}
+
+/// The install's stage in INSTALL_STAGES.
+fn current_install_stage(install: &Install) -> usize {
+    match install.status {
+        Status::Finished(true) => INSTALL_STAGES.len(),
+        _ => install_stage(&install.progress().2),
+    }
+}
+
+/// (done 0..1, "Step 3/7")
 fn progress(app: &App) -> (f64, String) {
-    let stages = STAGES.len() as f64 + 1.0;
+    let stages = STAGES.len();
     match &app.install {
-        Some(install) => {
-            let (step, total, _) = install.progress();
-            let done = match install.status {
-                Status::Finished(true) => 1.0,
-                _ if total == 0 => 0.0,
-                _ => step.saturating_sub(1) as f64 / total as f64,
-            };
-            (done, format!("Installing {step}/{total}"))
-        }
-        None if app.preview => (STAGES.len() as f64 / stages, "Preview".into()),
+        Some(install) => (install_done(install), format!("Step {}/{stages}", (current_install_stage(install) + 1).min(stages))),
+        None if app.preview => (1.0, "Preview".into()),
         None => {
             let stage = stage_of(app.step);
-            (stage as f64 / stages, format!("Stage {}/{}", stage + 1, STAGES.len() + 1))
+            (stage as f64 / stages as f64, format!("Step {}/{stages}", stage + 1))
         }
     }
 }
 
 fn header(f: &mut Frame, area: Rect, app: &App) {
     let (done, label) = progress(app);
-    let wide = area.width >= 100;
-    let left = Line::from(vec![
-        Span::styled(if wide { "2Lazy4Arch: Install Arch Fast" } else { "2Lazy4Arch" }, Style::new().fg(Color::Yellow).bold()),
-        Span::styled(if wide { format!(" v{VERSION}   ") } else { "  ".into() }, Style::new().fg(DIM)),
-        "Progress: ".into(),
-        Span::styled(bar(if wide { 20 } else { 12 }, done), Style::new().fg(Color::Green)),
-        Span::styled(format!(" {:.0}%", done * 100.0), Style::new().bold()),
-        Span::styled(format!(" ({label})"), Style::new().fg(DIM)),
-    ]);
-    let (firmware, color) = if app.sys.uefi { ("Active", Color::Green) } else { ("BIOS - not supported", Color::Red) };
-    let right = Line::from(vec![
-        "UEFI: ".into(),
-        Span::styled(firmware, Style::new().fg(color).bold()),
-        Span::styled(" | ", Style::new().fg(DIM)),
-        format!("Kernel: {}", app.sys.kernel.split('-').next().unwrap_or("?")).into(),
-    ]);
-    let block = Block::default().borders(Borders::ALL).border_style(Style::new().fg(DIM));
-    let inner = block.inner(area);
+    let block = boxed();
+    let inner = pad(block.inner(area));
     f.render_widget(block, area);
-    // right side only when both fit
-    let fits = left.width() + right.width() + 2 <= inner.width as usize;
-    f.render_widget(Paragraph::new(left), inner);
-    if fits {
+    let width = inner.width as usize;
+
+    let left = |full: bool, bar_width: usize| {
+        Line::from(vec![
+            Span::styled(if full { "2Lazy4Arch: Install Arch Fast" } else { "2Lazy4Arch" }, Style::new().fg(TITLE).bold()),
+            dim(if full { format!("   v{VERSION}   ") } else { "  ".into() }),
+            "Progress: ".into(),
+            Span::styled(bar(bar_width, done, '=', '-'), Style::new().fg(Color::Green)),
+            Span::styled(format!(" {:.0}%", done * 100.0), Style::new().bold()),
+            dim(format!(" ({label})")),
+        ])
+    };
+    let (firmware, color) = if app.sys.uefi { ("Active", Color::Green) } else { ("BIOS!", Color::Red) };
+    let right = |arch: bool| {
+        let mut spans = vec![];
+        if arch {
+            spans.extend([Span::raw(format!("Arch Linux ({})", std::env::consts::ARCH)), dim(" | ")]);
+        }
+        spans.extend([
+            "UEFI: ".into(),
+            Span::styled(firmware, Style::new().fg(color).bold()),
+            dim(" | "),
+            Span::raw("Kernel: "),
+            Span::styled(app.sys.kernel.split('-').next().unwrap_or("?").to_string(), Style::new().fg(ACCENT)),
+        ]);
+        Line::from(spans)
+    };
+    // most to least complete, the first that fits
+    let layouts = [(left(true, 20), Some(right(true))), (left(true, 14), Some(right(false))), (left(false, 14), Some(right(false))), (left(false, 12), None)];
+    let (left, right) = layouts.into_iter().find(|(l, r)| l.width() + r.as_ref().map_or(0, |r| r.width() + 3) <= width).unwrap_or((left(false, 8), None));
+    if let Some(right) = right {
         f.render_widget(Paragraph::new(right).alignment(Alignment::Right), inner);
     }
+    f.render_widget(Paragraph::new(left), inner);
 }
 
 fn gpu_names(sys: &System) -> String {
@@ -130,7 +174,8 @@ fn gpu_names(sys: &System) -> String {
 
 fn step_label(step: Step) -> &'static str {
     match step {
-        Step::Partition => "Partitioning",
+        Step::Welcome => "Welcome",
+        Step::Partition => "Disk",
         Step::Boot | Step::FormatBoot => "EFI partition",
         Step::Root => "Root partition",
         Step::Home | Step::FormatHome => "Home partition",
@@ -153,7 +198,7 @@ fn step_label(step: Step) -> &'static str {
         Step::Extras => "Extras",
         Step::Packages => "Packages",
         Step::Finish => "When done",
-        Step::Review => "Review",
+        Step::Review => "Summary",
     }
 }
 
@@ -161,132 +206,73 @@ fn device_name(path: Option<&String>) -> String {
     path.map_or("none".into(), |p| p.trim_start_matches("/dev/").to_string())
 }
 
-fn summary(app: &App, step: Step) -> String {
-    let fs = &app.filesystem;
-    let c = &app.cfg;
-    let format = |yes: bool| if yes { " (format)" } else { "" };
-    match step {
-        Step::Partition => match c.storage.partitioning.first() {
-            Some(plan) => format!("{} {}", if plan.wipe { "erase" } else { "free space" }, device_name(Some(&plan.disk))),
-            None => "existing".into(),
-        },
-        Step::Boot => format!("{}{}", device_name(fs.get("boot")), format(fs.format_boot)),
-        Step::Root => device_name(fs.get("/")),
-        Step::Home => format!("{}{}", device_name(fs.get("home")), format(fs.format_home && fs.get("home").is_some())),
-        Step::ExtraMounts => match c.storage.other.len() {
-            0 => "none".into(),
-            n => n.to_string(),
-        },
-        Step::Swap => c.storage.swap.0.map_or("none".into(), |gb| format!("{gb} GB")),
-        Step::Mirrors => c.mirrors.clone(),
-        Step::Timezone => c.timezone.clone(),
-        Step::Locale => c.locale.clone(),
-        Step::Accounts => c.users.first().map(|u| u.name.clone()).unwrap_or_default(),
-        Step::Shell => c.users.first().map_or("", |u| short(&SHELLS, u.shell)).into(),
-        Step::MoreUsers => match c.users.len().saturating_sub(1) {
-            0 => "none".into(),
-            n => n.to_string(),
-        },
-        Step::Bootloader => short(&BOOTLOADERS, c.bootloader).into(),
-        Step::Privilege => short(&PRIVILEGE, c.admin_tool).into(),
-        Step::Nvidia => c.gpu_drivers(&app.sys.gpus).into_iter().find(|d| d.is_nvidia()).map_or("", |d| short(&NVIDIA, d)).into(),
-        Step::Amd => c.gpu_drivers(&app.sys.gpus).into_iter().find(|d| !d.is_nvidia()).map_or("", |d| short(&AMD, d)).into(),
-        Step::Desktop => short(&DESKTOPS, c.desktop).into(),
-        Step::Autologin => c.autologin.clone().unwrap_or("no".into()),
-        Step::Browser => short(&BROWSERS, c.browser()).into(),
-        Step::Wifi => c.network.connections.first().and_then(|w| w.ssid.clone()).unwrap_or("none".into()),
-        Step::Extras => {
-            let on: Vec<&str> = EXTRAS.iter().filter(|(e, _)| app.extra_on(*e)).map(|(_, l)| l.split(' ').next().unwrap_or(l)).collect();
-            if on.is_empty() {
-                "none".into()
-            } else {
-                on.join(", ")
-            }
-        }
-        Step::Packages => format!("{} + {} AUR", c.packages.pacman.len(), c.packages.aur.len()),
-        Step::Finish => short(&FINISH, c.finish).into(),
-        _ => String::new(),
-    }
+/// One stage row: "01. Partitioning      [OK]"
+fn stage_row(index: usize, name: &str, width: usize, current: bool, cursor: bool, badge: &str) -> Line<'static> {
+    let label = format!("{}{:02}. {name}", if current { ">> " } else { "" }, index + 1);
+    let pad = width.saturating_sub(label.len() + badge.len());
+    let (label_style, badge_style) = if cursor {
+        (Style::new().fg(Color::Black).bg(ACCENT).bold(), Style::new().fg(Color::Black).bg(ACCENT).bold())
+    } else if current {
+        (SELECTED, SELECTED)
+    } else if badge == "[OK]" {
+        (Style::new().fg(DIM).add_modifier(Modifier::CROSSED_OUT), Style::new().fg(Color::Green).bold())
+    } else if badge == "[!!]" {
+        (Style::new().fg(Color::Red), Style::new().fg(Color::Red).bold())
+    } else {
+        (Style::new().fg(Color::Gray), Style::new().fg(DIM))
+    };
+    Line::from(vec![Span::styled(format!("{label}{}", " ".repeat(pad)), label_style), Span::styled(badge.to_string(), badge_style)])
 }
 
 fn sidebar(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::new().fg(DIM))
-        .title(Span::styled("[ INSTALLER STAGES ]", Style::new().fg(ACCENT).bold()));
-    let inner = block.inner(area);
+    let block = titled("[ INSTALLER STAGES ]".into());
+    let inner = pad(block.inner(area));
     f.render_widget(block, area);
     let width = inner.width as usize;
 
-    let installing = app.install.is_some();
-    let current = if installing { STAGES.len() } else { stage_of(app.step) };
-    let spinner = app.install.as_ref().map(|i| SPINNER[(i.started.elapsed().as_millis() / 150) as usize % 4]).unwrap_or("|");
-    let mut lines: Vec<Line> = vec![];
-    for i in 0..=STAGES.len() {
-        let name = STAGES.get(i).map_or("Install", |(name, _)| name);
-        let done = installing && i < STAGES.len() || STAGES.get(i).is_some_and(|(_, steps)| steps.iter().all(|s| app.skipped(*s) || app.done.contains(s)));
-        let badge = match (&app.install, i == STAGES.len()) {
-            (Some(install), true) => match install.status {
-                Status::Running => format!("[{spinner}]"),
-                Status::Finished(true) => "[OK]".into(),
-                Status::Finished(false) => "[!!]".into(),
-            },
-            _ if done && i != current => "[OK]".into(),
-            _ => "[ ]".into(),
-        };
-        let label = format!("{}{:02}. {name}", if i == current { ">> " } else { "" }, i + 1);
-        let pad = width.saturating_sub(label.len() + badge.len() + 1);
-        let (label_style, badge_style) = if i == current {
-            (Style::new().fg(Color::Black).bg(ACCENT).bold(), Style::new().fg(Color::Black).bg(ACCENT).bold())
-        } else if badge == "[OK]" {
-            (Style::new().fg(DIM).add_modifier(Modifier::CROSSED_OUT), Style::new().fg(Color::Green).bold())
-        } else if badge == "[!!]" {
-            (Style::new().fg(Color::Red), Style::new().fg(Color::Red).bold())
-        } else {
-            (Style::new().fg(Color::Gray), Style::new().fg(DIM))
-        };
-        lines.push(Line::from(vec![Span::styled(format!("{label}{} ", " ".repeat(pad)), label_style), Span::styled(badge, badge_style)]));
-    }
-
-    // what's been picked in this stage
-    if !installing {
-        let picked: Vec<Line> = STAGES[current]
-            .1
-            .iter()
-            .filter(|s| app.done.contains(s) && !summary(app, **s).is_empty())
-            .map(|s| Line::from(vec![Span::styled(format!(" {:<15}", step_label(*s)), Style::new().fg(DIM)), Span::raw(summary(app, *s))]))
-            .collect();
-        if !picked.is_empty() {
-            lines.push(Line::default());
-            lines.push(Line::from(Span::styled("Picked", Style::new().fg(ACCENT))));
-            lines.extend(picked);
-        }
-    }
-    f.render_widget(Paragraph::new(lines), inner);
-
-    let foot = match &app.install {
+    let mut lines = vec![Line::default()];
+    let foot: [Line; 2] = match &app.install {
         Some(install) => {
+            let current = current_install_stage(install);
+            let spinner = SPINNER[(install.started.elapsed().as_millis() / 150) as usize % 4];
+            for (i, (name, _)) in INSTALL_STAGES.iter().enumerate() {
+                let badge = match (i.cmp(&current), install.status) {
+                    (std::cmp::Ordering::Less, _) => "[OK]".to_string(),
+                    (std::cmp::Ordering::Equal, Status::Running) => format!("[{spinner}]"),
+                    (std::cmp::Ordering::Equal, _) => "[!!]".into(),
+                    _ => "[ ]".into(),
+                };
+                lines.push(stage_row(i, name, width, i == current, false, &badge));
+            }
             let (text, color) = match install.status {
+                Status::Running if install.paused => ("PAUSED", Color::Yellow),
                 Status::Running => ("RUNNING", Color::Green),
                 Status::Finished(true) => ("DONE", Color::Green),
                 Status::Finished(false) => ("FAILED", Color::Red),
             };
-            Line::from(vec![Span::styled("Execution: ", Style::new().fg(DIM)), Span::styled(text, Style::new().fg(color).bold())])
+            [
+                Line::from(vec![dim("Execution: "), Span::styled(text, Style::new().fg(color).bold())]),
+                Line::from(vec![Span::styled("[P]", Style::new().bold()), dim(if install.paused { " resume stream" } else { " pause stream" })]),
+            ]
         }
-        None => Line::from(vec![
-            Span::styled("CPU ", Style::new().fg(DIM)),
-            match app.sys.cpu.as_deref() {
-                Some("amd") => "AMD".into(),
-                Some("intel") => "Intel".into(),
-                _ => "?".into(),
-            },
-            Span::styled("  GPU ", Style::new().fg(DIM)),
-            gpu_names(&app.sys).into(),
-        ]),
+        None => {
+            let current = if app.preview { STAGES.len() } else { stage_of(app.step) };
+            for (i, (name, steps)) in STAGES.iter().enumerate() {
+                let done = app.preview || steps.iter().all(|s| app.skipped(*s) || app.done.contains(s));
+                let badge = if done && i != current { "[OK]" } else { "[ ]" };
+                lines.push(stage_row(i, name, width, i == current, app.stages_focused && i == app.stage_cursor, badge));
+            }
+            let focus = if app.stages_focused { "Stages".to_string() } else { format!("Main [{}]", step_label(app.step)) };
+            [
+                Line::from(vec![dim("Pane Focus: "), Span::styled(focus, Style::new().fg(TITLE))]),
+                Line::from(vec![Span::styled("[Tab]", Style::new().bold()), dim(" switch pane")]),
+            ]
+        }
     };
-    if inner.height > 2 {
-        let bottom = Rect { y: inner.y + inner.height - 1, height: 1, ..inner };
-        f.render_widget(Paragraph::new(foot), bottom);
+    f.render_widget(Paragraph::new(lines), inner);
+    if inner.height > 10 {
+        let bottom = Rect { y: inner.y + inner.height - 2, height: 2, ..inner };
+        f.render_widget(Paragraph::new(foot.to_vec()), bottom);
     }
 }
 
@@ -297,6 +283,7 @@ fn title(app: &App) -> String {
         (Some(Sub::NewUser { admin: true }), _) => "New admin user".into(),
         (Some(Sub::NewUser { .. }), _) => "New user".into(),
         (Some(Sub::Extra(extra)), _) => EXTRAS.iter().find(|(e, _)| e == extra).map_or("", |(_, l)| *l).into(),
+        (None, Step::Welcome) => "Welcome to 2Lazy4Arch".into(),
         (None, Step::Partition) => "Select a disk to partition".into(),
         (None, Step::FormatBoot) => "Format the EFI partition?".into(),
         (None, Step::FormatHome) => "Format the home partition?".into(),
@@ -305,7 +292,7 @@ fn title(app: &App) -> String {
         (None, Step::Shell) => "Your shell".into(),
         (None, Step::Wifi) => "Wi-Fi for the new system".into(),
         (None, Step::Review) if app.preview => "Preview".into(),
-        (None, Step::Review) => "Ready to install".into(),
+        (None, Step::Review) => "Summary: ready to install".into(),
         (None, s) => step_label(s).into(),
     }
 }
@@ -319,6 +306,7 @@ fn help(app: &App) -> String {
         (Some(Sub::Extra(Extra::Ssh)), _) => "OpenSSH, on at boot. With a GitHub user, its public keys go into your authorized_keys and you log in with them instead of a password.".into(),
         (Some(Sub::Extra(Extra::Tailscale)), _) => "With an auth key the machine joins your tailnet on first boot, then the key is deleted. Without one, run sudo tailscale up yourself.".into(),
         (Some(Sub::Extra(_)), _) => "Classic VNC only uses the first 8 characters. VNC isn't encrypted, so keep it on a trusted network.".into(),
+        (None, Step::Welcome) => "This is what was found. Nothing is written to disk until you confirm the summary at the end.".into(),
         (None, Step::Partition) => "Pick a disk to erase, use its free space or edit it in cfdisk. Continue if your partitions are ready: you pick the EFI and root partitions next.".into(),
         (None, Step::Boot) => "Mounted at /boot. If another OS is installed, pick its EFI partition and keep it.".into(),
         (None, Step::FormatBoot) => format!("{}: formatting erases other OSes' bootloaders. Only format a new or unused EFI partition.", device_name(fs.get("boot"))),
@@ -357,7 +345,9 @@ fn help(app: &App) -> String {
 fn status(app: &App) -> Option<(&'static str, String, Color)> {
     if let Some(install) = &app.install {
         return Some(match install.status {
-            Status::Running => ("ACTIVE", "Changes are being written to disk. Do not power off or remove the boot media.".into(), Color::Red),
+            Status::Running if install.abort_armed => ("ABORT?", "Press q again to stop the install. The disks may be left half-installed.".into(), Color::Red),
+            Status::Running if install.paused => ("PAUSED", "Output is paused; the install keeps running. P resumes.".into(), Color::Yellow),
+            Status::Running => ("ACTIVE", "Changes are currently being written to disk. Do not power off the system or remove the boot media.".into(), Color::Red),
             Status::Finished(true) => ("DONE", "Installation finished. q to leave.".into(), Color::Green),
             Status::Finished(false) => ("FAILED", "The install stopped; scroll up for why. The log is at /var/log/2lazy4arch.log. q to leave.".into(), Color::Red),
         });
@@ -366,73 +356,88 @@ fn status(app: &App) -> Option<(&'static str, String, Color)> {
         return Some(("ERROR", e.clone(), Color::Red));
     }
     match app.step {
-        Step::Partition if app.sub.is_none() => Some(("WARN", "cfdisk writes partition changes immediately and permanently.".into(), Color::Yellow)),
+        Step::Welcome if !app.sys.uefi => Some(("WARN", "This machine booted in BIOS mode. Boot the ISO in UEFI mode to install.".into(), Color::Red)),
+        Step::Partition if app.sub.is_none() => Some(("WARN", "All partitioning changes made with cfdisk are immediate and permanent.".into(), Color::Red)),
         Step::Review if !app.problems.is_empty() => Some(("BLOCKED", format!("{} problem(s) to fix before installing, listed above.", app.problems.len()), Color::Red)),
         Step::Review => Some(("WARN", "y erases everything marked ERASE or FORMAT.".into(), Color::Yellow)),
         _ => None,
     }
 }
 
-fn hints(app: &App) -> &'static str {
+/// (key, what it does) pairs for the footer, and the right-hand quit hint.
+fn hints(app: &App) -> (Vec<(&'static str, &'static str)>, &'static str) {
     if let Some(install) = &app.install {
         return match install.status {
-            Status::Running => "keys go to the installer / (pgup/pgdn) scroll",
-            Status::Finished(_) => "(pgup/pgdn) scroll / (q) leave",
+            Status::Running => (
+                vec![("[P]", if install.paused { "resume stream" } else { "pause stream" }), ("[S]", "auto-scroll"), ("[C]", "clear screen"), ("(pgup/pgdn)", "scroll")],
+                "(q) abort install",
+            ),
+            Status::Finished(_) => (vec![("(pgup/pgdn)", "scroll")], "(q) leave"),
         };
     }
-    if app.is_form() {
-        "(tab) next field / (enter) confirm / (esc) back"
+    let quit = if app.step == Step::Welcome || app.preview { "(esc) quit" } else { "(ctrl+c) quit" };
+    let keys = if app.stages_focused {
+        vec![("(up/down)", "move"), ("(enter)", "jump to stage"), ("[tab]", "back")]
+    } else if app.is_form() {
+        vec![("(tab)", "next field"), ("(enter)", "confirm"), ("(esc)", "back")]
     } else if app.step == Step::Review {
-        if app.preview {
-            "(pgup/pgdn) scroll / (y) install / (esc) quit"
-        } else {
-            "(pgup/pgdn) scroll / (y) install / (esc) back"
+        let mut keys = vec![("(pgup/pgdn)", "scroll"), ("(y)", "install")];
+        if !app.preview {
+            keys.extend([("[tab]", "switch pane"), ("(esc)", "back")]);
         }
-    } else if app.filterable() {
-        "type to filter / (enter) select / (esc) back"
-    } else if app.step == Step::Partition && app.sub.is_none() {
-        "(up/down) move / (enter) select / (esc) quit"
+        keys
+    } else if app.filtering {
+        vec![("type", "to search"), ("(enter)", "select"), ("(esc)", "clear")]
     } else {
-        "(up/down) move / (enter) select / (esc) back"
-    }
+        vec![("[/]", "search"), ("[tab]", "switch pane"), ("(enter)", "select"), ("(esc)", "back")]
+    };
+    (keys, quit)
 }
 
 fn footer(f: &mut Frame, area: Rect, app: &App) {
     let cols = split(Direction::Horizontal, area, [Constraint::Length(36), Constraint::Min(0)]);
     let (stage, step) = match &app.install {
-        Some(install) => ("Installing".to_string(), install.progress().2),
+        Some(install) => {
+            let stage = current_install_stage(install).min(INSTALL_STAGES.len() - 1);
+            (INSTALL_STAGES[stage].0.to_string(), install.progress().2)
+        }
         None if app.preview => ("Config file".into(), "Preview".into()),
         None => (STAGES[stage_of(app.step)].0.to_string(), step_label(app.step).to_string()),
     };
-    let crumbs = Line::from(vec![Span::styled(stage, Style::new().fg(Color::Yellow).bold()), Span::styled(" | ", Style::new().fg(DIM)), Span::raw(step)]);
-    let boxed = || Block::default().borders(Borders::ALL).border_style(Style::new().fg(DIM));
+    let crumbs = Line::from(vec![Span::styled(stage, Style::new().fg(TITLE).bold()), dim(" | "), Span::raw(step)]);
     f.render_widget(Paragraph::new(crumbs).block(boxed()), cols[0]);
 
     let block = boxed();
     let inner = block.inner(cols[1]);
     f.render_widget(block, cols[1]);
-    f.render_widget(Paragraph::new(Span::styled(hints(app), Style::new().fg(ACCENT))), inner);
-    let quit = if app.install.as_ref().is_some_and(|i| i.status == Status::Running) { "(ctrl+c) abort install" } else { "(ctrl+c) quit" };
-    if hints(app).len() + quit.len() + 2 <= inner.width as usize {
-        f.render_widget(Paragraph::new(Span::styled(quit, Style::new().fg(Color::Red))).alignment(Alignment::Right), inner);
+    let (keys, quit) = hints(app);
+    let mut spans = vec![];
+    for (i, (key, what)) in keys.iter().enumerate() {
+        if i > 0 {
+            spans.push(dim(" / "));
+        }
+        spans.push(Span::styled(*key, Style::new().bold()));
+        spans.push(Span::styled(format!(" {what}"), Style::new().fg(KEY_WORD)));
     }
+    let line = Line::from(spans);
+    if line.width() + quit.len() + 2 <= inner.width as usize {
+        f.render_widget(Paragraph::new(Span::styled(quit, Style::new().fg(DIM))).alignment(Alignment::Right), inner);
+    }
+    f.render_widget(Paragraph::new(line), inner);
 }
 
 fn panel(f: &mut Frame, area: Rect, app: &mut App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::new().fg(DIM))
-        .title(Span::styled(format!("[ {} ]", title(app).to_uppercase()), Style::new().fg(ACCENT).bold()));
-    let inner = block.inner(area);
+    let block = titled(format!("[ {} ]", title(app).to_uppercase()));
+    let inner = pad(block.inner(area));
     f.render_widget(block, area);
 
     let help = help(app);
-    let width = inner.width.saturating_sub(2).max(1);
+    let width = inner.width.max(1);
     let help_height = help.chars().count() as u16 / width + 2;
     let rows = split(Direction::Vertical, inner, [Constraint::Length(help_height), Constraint::Min(0)]);
-    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }).fg(Color::Gray), pad(rows[0]));
+    f.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }).fg(Color::Gray), rows[0]);
 
-    let content = pad(rows[1]);
+    let content = rows[1];
     if app.is_form() {
         form(f, content, app);
     } else if app.step == Step::Review {
@@ -444,7 +449,11 @@ fn panel(f: &mut Frame, area: Rect, app: &mut App) {
         let max = (lines.len() as u16).saturating_sub(content.height);
         app.scroll = app.scroll.min(max);
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((app.scroll, 0)), content);
-    } else if app.step == Step::Partition && app.sub.is_none() && content.height > 6 {
+    } else if app.step == Step::Welcome {
+        let rows = split(Direction::Vertical, content, [Constraint::Min(0), Constraint::Length(2)]);
+        f.render_widget(Paragraph::new(hardware_lines(&app.sys)), rows[0]);
+        list(f, rows[1], app);
+    } else if app.step == Step::Partition && app.sub.is_none() && content.height > 8 {
         let rows = split(Direction::Vertical, content, [Constraint::Min(0), Constraint::Length(3)]);
         list(f, rows[0], app);
         disk_details(f, rows[1], app);
@@ -453,28 +462,106 @@ fn panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
+/// The Welcome screen: what was found on this machine.
+fn hardware_lines(sys: &System) -> Vec<Line<'static>> {
+    let ok = |good: bool| if good { Span::styled("  [OK]", Style::new().fg(Color::Green).bold()) } else { Span::styled("  [!!]", Style::new().fg(Color::Red).bold()) };
+    let row = |label: &str, value: String| vec![dim(format!("{label:<11}")), Span::styled(value, Style::new().bold())];
+    let mut lines = vec![];
+    let mut system = row("System", format!("Arch Linux ISO ({}), kernel {}", std::env::consts::ARCH, sys.kernel));
+    system.push(Span::raw(""));
+    lines.push(Line::from(system));
+    let mut firmware = row("Firmware", if sys.uefi { "UEFI".into() } else { "BIOS (not supported)".into() });
+    firmware.push(ok(sys.uefi));
+    lines.push(Line::from(firmware));
+    let cpu = match sys.cpu.as_deref() {
+        Some("amd") => "AMD, gets amd-ucode",
+        Some("intel") => "Intel, gets intel-ucode",
+        _ => "unknown, no microcode",
+    };
+    lines.push(Line::from(row("CPU", cpu.into())));
+    lines.push(Line::from(row("Memory", format!("{:.1} GB", sys.memory_kib as f64 / 1_048_576.0))));
+    lines.push(Line::from(row("Graphics", gpu_names(sys))));
+    let disks: Vec<String> = sys.disks().iter().map(|d| format!("{} {}", d.name(), gb(d.size))).collect();
+    lines.push(Line::from(row("Storage", if disks.is_empty() { "no disks found".into() } else { disks.join(", ") })));
+    let mut network = row("Network", if sys.links_up.is_empty() { "no link up (iwctl for wifi)".into() } else { format!("link up on {}", sys.links_up.join(", ")) });
+    network.push(ok(!sys.links_up.is_empty()));
+    lines.push(Line::from(network));
+    lines
+}
+
+/// Disk sizes the way vendors print them: "512.1 GB"
+fn gb(bytes: Option<u64>) -> String {
+    format!("{:.1} GB", bytes.unwrap_or(0) as f64 / 1e9)
+}
+
+fn disk_tag(disk: &BlockDevice) -> String {
+    let kind = if disk.rota { "HDD" } else { "SSD" };
+    match disk.tran.as_deref() {
+        Some("nvme") => "NVMe SSD".into(),
+        Some("sata") | Some("ata") => format!("SATA {kind}"),
+        Some("usb") => "USB".into(),
+        Some(other) => other.to_uppercase(),
+        None if disk.name().starts_with("vd") => "virtio".into(),
+        None => "disk".into(),
+    }
+}
+
+fn table_type(disk: &BlockDevice) -> (&'static str, Color) {
+    match disk.pttype.as_deref() {
+        Some("gpt") => ("GPT", Color::Green),
+        Some("dos") => ("MBR", Color::Yellow),
+        Some(_) => ("other", Color::Yellow),
+        None => ("empty", DIM),
+    }
+}
+
+/// ">> sda [SATA SSD]      Size: 512.1 GB   Model: Samsung SSD 870   Type: GPT"
+fn disk_line(disk: &BlockDevice, width: usize) -> Line<'static> {
+    let (table, color) = table_type(disk);
+    let model = disk.model.as_deref().unwrap_or("").trim().to_string();
+    let right = vec![
+        dim("Size: "),
+        Span::styled(format!("{:<10}", gb(disk.size)), Style::new().bold()),
+        dim("  Model: "),
+        Span::raw(format!("{model:<18}")),
+        dim("  Type: "),
+        Span::styled(table, Style::new().fg(color).bold()),
+    ];
+    let left = vec![Span::styled(format!("{:<9}", disk.name()), Style::new().bold()), Span::styled(format!("[{}]", disk_tag(disk)), Style::new().fg(Color::Gray).bg(DIM))];
+    let used: usize = left.iter().chain(right.iter()).map(|s| s.width()).sum();
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used + 1).max(2))));
+    spans.extend(right);
+    Line::from(spans)
+}
+
 /// Under the disk list: about the highlighted disk.
 fn disk_details(f: &mut Frame, area: Rect, app: &App) {
     let disks = app.sys.disks();
-    let Some(disk) = app.list.selected().and_then(|i| disks.get(i)) else { return };
-    let parts: Vec<_> = app.sys.partitions().into_iter().filter(|p| p.pkname.as_deref() == Some(disk.name())).collect();
-    let used: u64 = parts.iter().filter_map(|p| p.size).sum();
-    let free = disk.size.unwrap_or(0).saturating_sub(used);
-    let key = |k: &str| Span::styled(format!("{k}: "), Style::new().fg(DIM));
-    let mut first = vec![Span::styled("Target device: ", Style::new().fg(Color::Yellow).bold()), Span::styled(disk.path.clone(), Style::new().fg(ACCENT))];
-    if !parts.is_empty() {
-        first.push(Span::styled("  [!] has existing partitions", Style::new().fg(Color::Yellow)));
-    }
+    let Some(disk) = app.list.selected().and_then(|i| app.visible().get(i).copied()).and_then(|i| disks.get(i)) else { return };
+    let parts = app.sys.partitions().into_iter().filter(|p| p.pkname.as_deref() == Some(disk.name())).count();
+    let first = Line::from(vec![Span::styled("Target Device Details: ", Style::new().bold()), Span::styled(disk.path.clone(), Style::new().fg(ACCENT).bold())]);
+    let sectors = format!("{} B / {} B", disk.log_sec.unwrap_or(512), disk.phy_sec.unwrap_or(512));
     let second = Line::from(vec![
-        key("Partitions"),
-        format!("{}   ", parts.len()).into(),
-        key("Free"),
-        format!("{}   ", installer::system::human_size(free)).into(),
-        key("Model"),
-        disk.model.clone().unwrap_or_default().trim().to_string().into(),
+        dim("Path: "),
+        Span::raw(format!("{}   ", disk.path)),
+        dim("Sector Size: "),
+        Span::raw(format!("{sectors}   ")),
+        dim("Partitions: "),
+        Span::raw(format!("{parts} existing   ")),
+        dim("Read-Only: "),
+        if disk.ro { Span::styled("Yes", Style::new().fg(Color::Red)) } else { Span::styled("No", Style::new().fg(Color::Green)) },
     ]);
-    let block = Block::default().borders(Borders::TOP).border_style(Style::new().fg(DIM));
-    f.render_widget(Paragraph::new(vec![Line::from(first), second]).block(block), area);
+    let block = Block::default().borders(Borders::TOP).border_style(Style::new().fg(BORDER));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if disk.pttype.is_some() {
+        let warning = Span::styled("[!] Selected drive contains existing tables", Style::new().fg(Color::Yellow));
+        if first.width() + warning.width() + 2 <= inner.width as usize {
+            f.render_widget(Paragraph::new(warning).alignment(Alignment::Right), Rect { height: 1, ..inner });
+        }
+    }
+    f.render_widget(Paragraph::new(vec![first, second]), inner);
 }
 
 /// One column of breathing room on each side.
@@ -485,33 +572,50 @@ fn pad(area: Rect) -> Rect {
 fn list(f: &mut Frame, area: Rect, app: &mut App) {
     let options = app.options();
     let visible = app.visible();
-    let area = if app.filterable() {
-        let rows = split(Direction::Vertical, area, [Constraint::Length(2), Constraint::Min(0)]);
+    let what = if app.step == Step::Partition && app.sub.is_none() { "devices" } else { "items" };
+    let area = if app.step != Step::Welcome && area.height >= 6 {
+        // search box, boxed when there's room
+        let tall = area.height >= 12;
+        let rows = split(Direction::Vertical, area, [Constraint::Length(if tall { 3 } else { 1 }), Constraint::Min(0)]);
+        let cols = split(Direction::Horizontal, rows[0], [Constraint::Min(0), Constraint::Length(24)]);
         let filter = Line::from(vec![
-            Span::styled("[/] ", Style::new().fg(Color::Yellow)),
-            Span::styled("Filter: ", Style::new().fg(DIM)),
-            Span::styled(format!("{}_", app.filter), Style::new().bold()),
-            Span::styled(if app.filter.is_empty() { "  (type to search)" } else { "  (esc to clear)" }, Style::new().fg(DIM)),
+            Span::styled("[/] ", Style::new().fg(TITLE).bold()),
+            dim("Filter: "),
+            Span::styled(format!("{}{}", app.filter, if app.filtering { "_" } else { "" }), Style::new().bold()),
+            dim(if app.filtering { "  (esc to clear)" } else if app.filter.is_empty() { "  (/ to search)" } else { "" }),
         ]);
-        let count = format!("Showing {} of {}", visible.len(), options.len());
-        if filter.width() + count.len() + 2 <= rows[0].width as usize {
-            f.render_widget(Paragraph::new(Span::styled(count, Style::new().fg(DIM))).alignment(Alignment::Right), rows[0]);
-        }
-        f.render_widget(Paragraph::new(filter), rows[0]);
+        let input = if tall { Paragraph::new(filter).block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(if app.filtering { TITLE } else { DIM }))) } else { Paragraph::new(filter) };
+        f.render_widget(input, cols[0]);
+        let count = Rect { y: cols[1].y + cols[1].height / 2, height: 1, ..cols[1] };
+        f.render_widget(Paragraph::new(dim(format!("Showing {} of {} {what}", visible.len(), options.len()))).alignment(Alignment::Right), count);
         rows[1]
     } else {
         area
     };
 
-    let items: Vec<ListItem> = visible.iter().map(|&i| ListItem::new(options[i].clone())).collect();
+    let disks = app.sys.disks();
+    let width = area.width.saturating_sub(3) as usize;
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|&i| {
+            if app.step == Step::Partition && app.sub.is_none() {
+                if let Some(disk) = disks.get(i) {
+                    return ListItem::new(disk_line(disk, width));
+                }
+                let style = if options[i].starts_with("->") { Style::new().fg(ACCENT).bold() } else { Style::new().fg(Color::Gray) };
+                return ListItem::new(Span::styled(options[i].clone(), style));
+            }
+            if options[i].starts_with("->") {
+                return ListItem::new(Span::styled(options[i].clone(), Style::new().fg(ACCENT).bold()));
+            }
+            ListItem::new(options[i].clone())
+        })
+        .collect();
     if items.is_empty() {
         f.render_widget(Paragraph::new("No matches. Backspace to edit the filter.").fg(DIM), area);
         return;
     }
-    let list = List::new(items)
-        .highlight_style(Style::new().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD))
-        .highlight_symbol(">> ")
-        .highlight_spacing(HighlightSpacing::Always);
+    let list = List::new(items).highlight_style(SELECTED).highlight_symbol(">> ").highlight_spacing(HighlightSpacing::Always);
     f.render_stateful_widget(list, area, &mut app.list);
 }
 
@@ -542,69 +646,151 @@ fn form(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
-/// The install: what it's doing, how far along, and its terminal.
+fn clock(seconds: u64) -> String {
+    format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)
+}
+
+/// "/dev/sda (Samsung SSD 870 512.1 GB, GPT)" for the disk holding root.
+fn target_disk(app: &App, plan: &storage::Plan) -> Option<String> {
+    let root = plan.mounts.iter().find(|(m, _)| m.is_empty())?;
+    let disk_path = match &root.1 {
+        Part::New { disk, .. } => disk.clone(),
+        Part::Existing { path, .. } => {
+            let part = app.sys.devices.iter().find(|d| &d.path == path)?;
+            format!("/dev/{}", part.pkname.as_deref()?)
+        }
+    };
+    let disk = app.sys.disks().into_iter().find(|d| d.path == disk_path)?;
+    let model = disk.model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(|m| format!("{m} ")).unwrap_or_default();
+    Some(format!("{disk_path} ({model}{}, {})", gb(disk.size), table_type(disk).0))
+}
+
+/// The install: what it's doing, how far along, its terminal, and where it's writing.
 fn install_panel(f: &mut Frame, area: Rect, app: &mut App) {
+    let plan = storage::plan(&app.cfg.storage, &app.sys).ok();
+    let target = plan.as_ref().and_then(|p| target_disk(app, p)).unwrap_or_default();
+    let mounts: Vec<(String, String)> = plan
+        .as_ref()
+        .map(|p| {
+            p.mounts
+                .iter()
+                .map(|(mount, part)| {
+                    let what = match part {
+                        Part::Existing { path, .. } => path.clone(),
+                        Part::New { name, .. } => format!("PARTLABEL={name}"),
+                    };
+                    (show_mount(mount), what)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let swap = app.cfg.storage.swap.0.map_or("none".into(), |gb| format!("{gb} GB file"));
     let Some(install) = &mut app.install else { return };
+
     let (status, color) = match install.status {
+        Status::Running if install.paused => ("PAUSED", Color::Yellow),
         Status::Running => ("RUNNING", Color::Green),
         Status::Finished(true) => ("DONE", Color::Green),
         Status::Finished(false) => ("FAILED", Color::Red),
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::new().fg(DIM))
-        .title(Span::styled(if area.width >= 64 { "[ TERMINAL: ARCH LINUX INSTALLATION ]" } else { "[ INSTALLING ]" }, Style::new().fg(ACCENT).bold()))
-        .title(Title::from(Span::styled(format!("[STATUS: {status}]"), Style::new().fg(color).bold())).alignment(Alignment::Right));
+    // the long title and both badges, dropping what doesn't fit
+    let status_badge = Span::styled(format!("[STATUS: {status}]"), Style::new().fg(color).bold());
+    let scroll_badge = Span::styled(format!("[AUTO-SCROLL: {}]", if install.autoscroll { "ON" } else { "OFF" }), Style::new().fg(ACCENT));
+    let long_title = "+-[ TERMINAL EXECUTION: ARCH LINUX INSTALLATION ]-+";
+    let room = area.width as usize - 4;
+    let title = if long_title.len() + status_badge.width() + 2 <= room { long_title } else { "+-[ INSTALLING ]-+" };
+    let mut badges = vec![status_badge];
+    if title.len() + Line::from(badges.clone()).width() + scroll_badge.width() + 5 <= room {
+        badges.extend([dim(" | "), scroll_badge]);
+    }
+    let block = boxed().title(Span::styled(title, Style::new().fg(TITLE).bold())).title(Title::from(Line::from(badges)).alignment(Alignment::Right));
     let inner = pad(block.inner(area));
     f.render_widget(block, area);
-    let rows = split(Direction::Vertical, inner, [Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]);
-
-    let (step, total, task) = install.progress();
-    let elapsed = install.elapsed();
-    let task = Line::from(vec![Span::styled("Current task: ", Style::new().fg(Color::Yellow).bold()), Span::styled(task, Style::new().bold())]);
-    let clock = format!("Elapsed: {:02}:{:02}:{:02}", elapsed / 3600, elapsed / 60 % 60, elapsed % 60);
-    if task.width() + clock.len() + 2 <= rows[0].width as usize {
-        f.render_widget(Paragraph::new(Span::styled(clock, Style::new().fg(DIM))).alignment(Alignment::Right), rows[0]);
-    }
-    f.render_widget(Paragraph::new(task), rows[0]);
-    let done = match install.status {
-        Status::Finished(true) => 1.0,
-        _ if total == 0 => 0.0,
-        _ => step.saturating_sub(1) as f64 / total as f64,
-    };
-    let bar_width = (rows[1].width as usize).saturating_sub(30).clamp(10, 60);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Overall: ", Style::new().fg(DIM)),
-            Span::styled(bar(bar_width, done), Style::new().fg(Color::Green)),
-            Span::styled(format!(" {:.0}%", done * 100.0), Style::new().bold()),
-            Span::styled(format!(" (step {step}/{total})"), Style::new().fg(DIM)),
-        ])),
-        rows[1],
+    let roomy = inner.height >= 18;
+    let rows = split(
+        Direction::Vertical,
+        inner,
+        [Constraint::Length(if roomy { 5 } else { 3 }), Constraint::Min(3), Constraint::Length(if roomy { 2 } else { 1 })],
     );
 
+    // the info box
+    let (step, total, task) = install.progress();
+    let done = install_done(install);
+    let stage = (current_install_stage(install) + 1).min(INSTALL_STAGES.len());
+    let info_area = if roomy {
+        let b = boxed();
+        let inner = pad(b.inner(rows[0]));
+        f.render_widget(b, rows[0]);
+        inner
+    } else {
+        rows[0]
+    };
+    let lines = split(Direction::Vertical, info_area, [Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]);
+    let task_line = Line::from(vec![Span::styled("Current Task: ", Style::new().fg(TITLE).bold()), Span::styled(task, Style::new().bold())]);
+    let root = mounts.iter().find(|(m, _)| m == "/").map(|(_, d)| d.clone()).unwrap_or_default();
+    let root_line = Line::from(vec![Span::raw("Target Root: "), Span::styled(root, Style::new().fg(ACCENT)), dim(" on /mnt")]);
+    if task_line.width() + root_line.width() + 2 <= lines[0].width as usize {
+        f.render_widget(Paragraph::new(root_line).alignment(Alignment::Right), lines[0]);
+    }
+    f.render_widget(Paragraph::new(task_line), lines[0]);
+
+    // both bars share what's left after their labels (about 62 columns)
+    let half = (lines[1].width as usize).saturating_sub(62).div_ceil(2).clamp(6, 40);
+    let mut progress = vec![
+        Span::raw("Overall: "),
+        Span::styled(bar(half, done, '=', '-'), Style::new().fg(Color::Green)),
+        Span::styled(format!(" {:.0}%", done * 100.0), Style::new().bold()),
+        dim(format!(" (Step {stage}/{}) ", INSTALL_STAGES.len())),
+    ];
+    if let Some((n, m)) = install.subtask().filter(|(n, m)| n <= m && *m > 0) {
+        let sub = n as f64 / m as f64;
+        let sub_line = vec![
+            Span::raw("   Sub-task: "),
+            Span::styled(bar(half, sub, '#', '.'), Style::new().fg(ACCENT)),
+            Span::styled(format!(" {:.0}%", sub * 100.0), Style::new().bold()),
+            dim(format!(" ({n}/{m} pkgs)")),
+        ];
+        if Line::from(progress.clone()).width() + Line::from(sub_line.clone()).width() <= lines[1].width as usize {
+            progress.extend(sub_line);
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(progress)), lines[1]);
+
+    let field = |label: &str, value: String, color: Color| vec![dim(format!("{label}: ")), Span::styled(value, Style::new().fg(color)), dim(" | ")];
+    let mut stats = vec![];
+    if let Some(speed) = install.speed() {
+        stats.extend(field("Speed", speed, Color::Green));
+    }
+    stats.extend(field("Elapsed", clock(install.elapsed()), Color::Green));
+    stats.extend(field("Steps", format!("{step}/{total}"), Color::White));
+    if let Some(pid) = install.pid {
+        stats.extend(field("Worker PID", pid.to_string(), Color::White));
+    }
+    stats.extend([dim("Log: "), Span::raw("/var/log/2lazy4arch.log")]);
+    f.render_widget(Paragraph::new(Line::from(stats)), lines[2]);
+
+    // the terminal
     let frame = Block::default().borders(Borders::ALL).border_style(Style::new().fg(DIM));
-    let screen_area = frame.inner(rows[2]);
-    f.render_widget(frame, rows[2]);
+    let screen_area = frame.inner(rows[1]);
+    f.render_widget(frame, rows[1]);
     install.resize(screen_area.height, screen_area.width);
     draw_screen(install.parser.screen(), screen_area, f.buffer_mut());
 
-    let target = match storage::plan(&app.cfg.storage, &app.sys) {
-        Ok(plan) => plan
-            .mounts
-            .iter()
-            .map(|(mount, part)| {
-                let what = match part {
-                    Part::Existing { path, .. } => path.trim_start_matches("/dev/").to_string(),
-                    Part::New { name, .. } => format!("new {name}"),
-                };
-                format!("{}: {what}", show_mount(mount))
-            })
-            .collect::<Vec<_>>()
-            .join("   "),
-        Err(_) => String::new(),
-    };
-    f.render_widget(Paragraph::new(Line::from(vec![Span::styled("Target: ", Style::new().fg(Color::Yellow).bold()), Span::styled(target, Style::new().fg(DIM))])), rows[3]);
+    // where it's writing
+    let lock = if install.status == Status::Running { Span::styled("[WRITE-LOCK ACTIVE]", Style::new().fg(Color::Green).bold()) } else { dim("[RELEASED]") };
+    let target_line = Line::from(vec![Span::styled("Execution Target: ", Style::new().fg(TITLE).bold()), Span::styled(target, Style::new().fg(ACCENT))]);
+    let mut mount_spans: Vec<Span> = mounts.iter().flat_map(|(m, d)| [dim(format!("{m}: ")), Span::raw(format!("{d}   "))]).collect();
+    mount_spans.extend([dim("Swap: "), Span::raw(format!("{swap}   ")), dim("Chroot Path: "), Span::raw("/mnt")]);
+    if roomy {
+        let parts = split(Direction::Vertical, rows[2], [Constraint::Length(1), Constraint::Length(1)]);
+        if target_line.width() + lock.width() + 2 <= parts[0].width as usize {
+            f.render_widget(Paragraph::new(lock).alignment(Alignment::Right), parts[0]);
+        }
+        f.render_widget(Paragraph::new(target_line), parts[0]);
+        f.render_widget(Paragraph::new(Line::from(mount_spans)), parts[1]);
+    } else {
+        f.render_widget(Paragraph::new(target_line), rows[2]);
+    }
 }
 
 fn section(title: &str) -> Line<'static> {

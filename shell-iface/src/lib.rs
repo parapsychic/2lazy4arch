@@ -1,11 +1,58 @@
 use std::{
     fmt::Debug,
-    process::{Child, Command, ExitStatus, Output, Stdio}, io::Write,
+    io::Write,
+    process::{Child, Command, ExitStatus, Output, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Result};
 use logger::Logger;
 pub mod logger;
+
+static ECHO: AtomicBool = AtomicBool::new(false);
+static SECRETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Print every command, timestamped, before running it (the install's terminal).
+pub fn echo_commands(on: bool) {
+    ECHO.store(on, Ordering::Relaxed);
+}
+
+/// Strings shown as *** in anything printed or logged from now on.
+pub fn set_secrets(secrets: Vec<String>) {
+    // ponytail: very short secrets would mask ordinary text, so they aren't masked
+    *SECRETS.lock().unwrap() = secrets.into_iter().filter(|s| s.len() >= 4).collect();
+}
+
+pub fn redact(text: &str) -> String {
+    SECRETS.lock().unwrap().iter().fold(text.to_string(), |text, secret| text.replace(secret.as_str(), "***"))
+}
+
+/// "14:22:04", UTC like the ISO's clock
+pub fn timestamp() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) % 86_400;
+    format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+/// "[14:22:04] EXEC: mkfs.ext4 -F /dev/sda2", with the label in an ANSI color.
+pub fn print_event(label: &str, color: u8, text: &str) {
+    println!("\x1b[2m[{}]\x1b[0m \x1b[1;{color}m{label}:\x1b[0m {}", timestamp(), redact(text));
+}
+
+fn announce(cmd: &str, args: &str) {
+    if ECHO.load(Ordering::Relaxed) {
+        print_event("EXEC", 35, format!("{cmd} {args}").trim_end());
+    }
+}
+
+fn announce_failure(cmd: &str, status: &ExitStatus) {
+    if ECHO.load(Ordering::Relaxed) {
+        print_event("FAIL", 31, &format!("{cmd} ({status})"));
+    }
+}
 
 /// Defines the mode at which it is running
 /// Shell in Debug does not run the actual command.
@@ -97,6 +144,7 @@ impl<'a> Shell<'a> {
     /// Collect stdout and stderr and store it in Output.
     /// Raises error if exited with non-zero code.
     pub fn run_with_args(&mut self, cmd: &str, args: &str) -> Result<Output> {
+        announce(cmd, args);
         let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {} {:#?}", cmd, args);
@@ -232,6 +280,7 @@ impl<'a> Shell<'a> {
     /// Only status is returned, not the output.
     /// Raises error if exited with non-zero code.
     pub fn run_and_wait(&mut self, cmd: &str) -> Result<ExitStatus> {
+        announce(cmd, "");
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
             let output = Command::new("echo").arg("dummy").status()?;
@@ -283,6 +332,7 @@ impl<'a> Shell<'a> {
     /// Only status is returned, not the output.
     /// Raises error if exited with non-zero code.
     pub fn run_and_wait_with_args(&mut self, cmd: &str, args: &str) -> Result<ExitStatus> {
+        announce(cmd, args);
         let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
@@ -293,12 +343,13 @@ impl<'a> Shell<'a> {
         let status = Command::new(cmd).args(args_vec).status()?;
 
         if !status.success() {
+            announce_failure(cmd, &status);
             self.log(&format!("`{cmd} {args}` failed with {status}"));
             return Err(anyhow!(
                 "{}: `{} {}` failed ({})",
                 self.identifier.to_uppercase(),
                 cmd,
-                args,
+                redact(args),
                 status
             ));
         }
@@ -311,6 +362,7 @@ impl<'a> Shell<'a> {
     /// Only status is returned, not the output.
     /// Raises error if exited with non-zero code.
     pub fn run_in_directory_and_wait_with_args(&mut self, dir:&str, cmd: &str, args: &str) -> Result<ExitStatus> {
+        announce(cmd, args);
         let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {}", cmd);
@@ -335,6 +387,7 @@ impl<'a> Shell<'a> {
     /// Run the program with given args, feeding `input` to its stdin, and wait.
     /// Raises error if exited with non-zero code. The input isn't logged (it may be a password).
     pub fn run_with_input(&mut self, cmd: &str, args: &str, input: &str) -> Result<()> {
+        announce(cmd, args);
         let args_vec = shell_words::split(args)?;
         if let RunMode::Debug = &self.build_mode {
             println!("Running Shell in Test Mode: Command: {} {}", cmd, args);
@@ -346,8 +399,9 @@ impl<'a> Shell<'a> {
         }
         let status = child.wait()?;
         if !status.success() {
+            announce_failure(cmd, &status);
             self.log(&format!("`{cmd} {args}` failed with {status}"));
-            return Err(anyhow!("{}: `{} {}` failed ({})", self.identifier.to_uppercase(), cmd, args, status));
+            return Err(anyhow!("{}: `{} {}` failed ({})", self.identifier.to_uppercase(), cmd, redact(args), status));
         }
         self.set_last_command(cmd, &status, None, None);
         Ok(())
@@ -474,5 +528,18 @@ impl<'a> Shell<'a> {
         let child = Command::new(cmd).args(args_vec).current_dir(dir).spawn()?;
         // spawned processes do not get saved.
         Ok(child)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secrets_are_masked() {
+        set_secrets(vec!["hunter22".into(), "ab".into()]);
+        assert_eq!(redact("iwctl --passphrase hunter22 station wlan0"), "iwctl --passphrase *** station wlan0");
+        // too short to mask without mangling ordinary text
+        assert_eq!(redact("tab"), "tab");
     }
 }

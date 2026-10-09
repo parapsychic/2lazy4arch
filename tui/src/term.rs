@@ -44,6 +44,13 @@ pub struct Install {
     pub status: Status,
     pub started: Instant,
     pub finished: Option<Instant>,
+    pub pid: Option<u32>,
+    /// [P]: output waits in the channel, the install keeps running
+    pub paused: bool,
+    /// [S]: follow new output; scrolling back turns it off
+    pub autoscroll: bool,
+    /// q was pressed once; a second q aborts
+    pub abort_armed: bool,
 }
 
 /// Lines kept above the screen for pgup.
@@ -57,6 +64,7 @@ impl Install {
         command.env("TERM", "xterm-256color");
         command.cwd(std::env::current_dir()?);
         let mut child = pty.slave.spawn_command(command)?;
+        let pid = child.process_id();
         drop(pty.slave);
 
         let mut reader = pty.master.try_clone_reader()?;
@@ -84,13 +92,21 @@ impl Install {
             status: Status::Running,
             started: Instant::now(),
             finished: None,
+            pid,
+            paused: false,
+            autoscroll: true,
+            abort_armed: false,
         })
     }
 
     /// Takes in whatever the child printed, and notices when it exits.
     pub fn pump(&mut self) {
-        while let Ok(bytes) = self.output.try_recv() {
+        while !self.paused {
+            let Ok(bytes) = self.output.try_recv() else { break };
             self.parser.process(&bytes);
+            if self.autoscroll {
+                self.parser.screen_mut().set_scrollback(0);
+            }
         }
         if let Ok(ok) = self.exit.try_recv() {
             self.status = Status::Finished(ok);
@@ -118,6 +134,36 @@ impl Install {
         let screen = self.parser.screen_mut();
         let to = (screen.scrollback() as isize + rows).max(0) as usize;
         screen.set_scrollback(to);
+        self.autoscroll = screen.scrollback() == 0;
+    }
+
+    pub fn toggle_autoscroll(&mut self) {
+        self.autoscroll = !self.autoscroll;
+        if self.autoscroll {
+            self.parser.screen_mut().set_scrollback(0);
+        }
+    }
+
+    /// [C]: blank the screen; history stays in the scrollback.
+    pub fn clear(&mut self) {
+        self.parser.process(b"\x1b[2J\x1b[H");
+    }
+
+    /// pacman's "(142/173)" on the latest line that has one.
+    pub fn subtask(&self) -> Option<(usize, usize)> {
+        self.parser.screen().contents().lines().rev().find_map(|line| {
+            let inner = line.trim_start().strip_prefix('(')?.split_once(')')?.0;
+            let (done, total) = inner.split_once('/')?;
+            Some((done.trim().parse().ok()?, total.trim().parse().ok()?))
+        })
+    }
+
+    /// A download speed like "62.4 MiB/s" from the latest line that shows one.
+    pub fn speed(&self) -> Option<String> {
+        self.parser.screen().contents().lines().rev().find_map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.windows(2).find(|w| w[1].ends_with("iB/s") && w[0].parse::<f64>().is_ok()).map(|w| format!("{} {}", w[0], w[1]))
+        })
     }
 
     /// (step, total, task) from the title the installer sets.
